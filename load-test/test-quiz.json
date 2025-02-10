@@ -1,0 +1,55 @@
+{
+    "title": "Load Test Quiz",
+    "description": "A simple quiz to test platform stability with 50 participants",
+    "theme": {
+        "backgroundColor": "#ffffff",
+        "textColor": "#333333",
+        "accentColor": "#007bff"
+    },
+    "questions": [
+        {
+            "questionText": "What is 2 + 2?",
+            "timeLimit": 10,
+            "options": [
+                {
+                    "text": "3",
+                    "isCorrect": false
+                },
+                {
+                    "text": "4",
+                    "isCorrect": true
+                },
+                {
+                    "text": "5",
+                    "isCorrect": false
+                },
+                {
+                    "text": "6",
+                    "isCorrect": false
+                }
+            ]
+        },
+        {
+            "questionText": "What is the capital of France?",
+            "timeLimit": 10,
+            "options": [
+                {
+                    "text": "London",
+                    "isCorrect": false
+                },
+                {
+                    "text": "Berlin",
+                    "isCorrect": false
+                },
+                {
+                    "text": "Paris",
+                    "isCorrect": true
+                },
+                {
+                    "text": "Madrid",
+                    "isCorrect": false
+                }
+            ]
+        }
+    ]
+}
