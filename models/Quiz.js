@@ -167,15 +167,34 @@ class Quiz {
 
     static async endQuiz(id, results) {
         try {
+            console.log('Starting endQuiz for id:', id);
+            
             // First get the current quiz to merge results
             const quiz = await this.findById(id);
             if (!quiz) {
                 throw new Error('Quiz not found');
             }
+            console.log('Found quiz:', JSON.stringify(quiz, null, 2));
 
             // Merge existing archived results with new results
             const existingResults = quiz.archivedResults || [];
             const updatedResults = [...existingResults, ...results];
+            console.log('Merged results:', JSON.stringify(updatedResults, null, 2));
+
+            // Ensure all required fields are present and in correct format
+            const sanitizedResults = updatedResults.map(result => ({
+                participantName: result.participantName || '',
+                score: Number(result.score) || 0,
+                completedAt: result.completedAt || new Date().toISOString(),
+                answers: (result.answers || []).map(answer => ({
+                    questionIndex: Number(answer.questionIndex),
+                    answeredAt: answer.answeredAt || new Date().toISOString(),
+                    isCorrect: answer.isCorrect === true || answer.isCorrect === 1 ? 1 : 0,
+                    timeTaken: Number(answer.timeTaken) || 0,
+                    points: Number(answer.points) || 0,
+                    answer: Number(answer.answer) || 0
+                }))
+            }));
 
             const params = {
                 TableName: this.tableName,
@@ -186,18 +205,32 @@ class Quiz {
                     ':sessionCode': '',
                     ':currentQuestion': -1,
                     ':activeParticipants': [],
-                    ':results': updatedResults
+                    ':results': sanitizedResults
                 },
                 ReturnValues: 'ALL_NEW'
             };
 
-            console.log('Ending quiz with params:', JSON.stringify(params, null, 2));
+            console.log('DynamoDB update params:', JSON.stringify(params, null, 2));
 
-            const command = new UpdateCommand(params);
-            const response = await docClient.send(command);
-            return response.Attributes;
+            try {
+                const command = new UpdateCommand(params);
+                const response = await docClient.send(command);
+                console.log('DynamoDB update response:', JSON.stringify(response.Attributes, null, 2));
+                return response.Attributes;
+            } catch (dbError) {
+                console.error('DynamoDB update error:', {
+                    error: dbError.message,
+                    code: dbError.code,
+                    statusCode: dbError.$metadata?.httpStatusCode
+                });
+                throw dbError;
+            }
         } catch (error) {
-            console.error('Error ending quiz:', error);
+            console.error('Error ending quiz:', {
+                error: error.message,
+                stack: error.stack,
+                name: error.name
+            });
             throw error;
         }
     }

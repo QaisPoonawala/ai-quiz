@@ -102,26 +102,31 @@
         <div class="modal-content winners-content">
             <div class="winners-announcement">
                 <h2>Quiz Champions!</h2>
+                <p id="totalParticipants"></p>
                 <div class="winners-podium">
                     <div class="winner" id="secondPlace">
                         <div class="trophy silver">🥈</div>
                         <h3>2nd Place</h3>
                         <p class="winner-name"></p>
                         <p class="winner-score"></p>
+                        <p class="winner-rank"></p>
                     </div>
                     <div class="winner" id="firstPlace">
                         <div class="trophy gold">🏆</div>
                         <h3>1st Place</h3>
                         <p class="winner-name"></p>
                         <p class="winner-score"></p>
+                        <p class="winner-rank"></p>
                     </div>
                     <div class="winner" id="thirdPlace">
                         <div class="trophy bronze">🥉</div>
                         <h3>3rd Place</h3>
                         <p class="winner-name"></p>
                         <p class="winner-score"></p>
+                        <p class="winner-rank"></p>
                     </div>
                 </div>
+                <div id="fullLeaderboard"></div>
                 <button onclick="closeWinnersModal()" class="close-winners">Close</button>
             </div>
         </div>

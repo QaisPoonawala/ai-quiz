@@ -230,39 +230,101 @@ exports.startQuiz = async (req, res) => {
 // End quiz
 exports.endQuiz = async (req, res) => {
     try {
+        console.log('Starting endQuiz process for quiz ID:', req.params.id);
+
+        // 1. Find and validate quiz
         const quiz = await Quiz.findById(req.params.id);
         if (!quiz) {
+            console.error('Quiz not found:', req.params.id);
             return res.status(404).json({ success: false, message: 'Quiz not found' });
         }
+        console.log('Found quiz:', JSON.stringify(quiz, null, 2));
 
-        // Get all participants for this quiz
+        // 2. Get participants
         console.log('Getting participants for quiz:', quiz.id);
         const participants = await Participant.findByQuizId(quiz.id);
-        console.log('Found participants:', participants);
+        console.log('Found participants:', JSON.stringify(participants, null, 2));
+
+        // 3. Handle no participants case
+        if (!participants || participants.length === 0) {
+            console.log('No participants found, ending quiz without results');
+            try {
+                const updatedQuiz = await Quiz.endQuiz(req.params.id, []);
+                console.log('Quiz ended successfully with no participants');
+                return res.json({ success: true, data: updatedQuiz });
+            } catch (error) {
+                console.error('Error ending quiz with no participants:', error);
+                throw error;
+            }
+        }
         
-        // Archive participants' results with their answers
-        const currentResults = participants.map(participant => ({
-            participantName: participant.name || '',
-            score: participant.score || 0,
-            completedAt: new Date().toISOString(),
-            answers: (participant.answers || []).map(answer => ({
-                questionIndex: answer.questionIndex,
-                answeredAt: answer.answeredAt,
-                isCorrect: answer.isCorrect,
-                timeTaken: answer.timeTaken,
-                points: answer.points || 0,
-                answer: answer.answer // Include which option was selected
-            }))
+        // 4. Process participant results
+        console.log('Processing participants results...');
+        const currentResults = participants.map(participant => {
+            console.log('Processing participant:', participant.name);
+            return {
+                participantName: participant.name || '',
+                score: participant.score || 0,
+                completedAt: new Date().toISOString(),
+                answers: (participant.answers || []).map(answer => {
+                    console.log('Processing answer:', answer);
+                    return {
+                        questionIndex: answer.questionIndex,
+                        answeredAt: answer.answeredAt,
+                        isCorrect: answer.isCorrect === true || answer.isCorrect === 1 ? 1 : 0,
+                        timeTaken: answer.timeTaken,
+                        points: answer.points || 0,
+                        answer: answer.answer
+                    };
+                })
+            };
+        });
+
+        // 5. Calculate winners with detailed stats
+        console.log('Calculating winners...');
+        const sortedResults = [...currentResults].sort((a, b) => b.score - a.score);
+        const winners = sortedResults.map((result, index) => ({
+            name: result.participantName,
+            score: result.score,
+            answeredQuestions: result.answers.length,
+            correctAnswers: result.answers.filter(a => a.isCorrect === 1).length,
+            rank: index + 1
         }));
+        console.log('Winners:', JSON.stringify(winners, null, 2));
 
-        console.log('Archiving results:', currentResults);
+        // 6. Archive results
+        console.log('Archiving results:', JSON.stringify(currentResults, null, 2));
         const updatedQuiz = await Quiz.endQuiz(req.params.id, currentResults);
-        console.log('Quiz ended successfully:', updatedQuiz);
+        console.log('Quiz ended successfully:', JSON.stringify(updatedQuiz, null, 2));
 
-        res.json({ success: true, data: updatedQuiz });
+        // 7. Notify connected clients via Socket.IO
+        const io = req.app.get('io');
+        if (io) {
+            console.log('Emitting quiz-ended event to room:', quiz.id.toString());
+            io.to(quiz.id.toString()).emit('quiz-ended', {
+                results: currentResults,
+                winners: winners
+            });
+        }
+
+        res.json({ 
+            success: true, 
+            data: {
+                ...updatedQuiz,
+                winners: winners
+            }
+        });
     } catch (error) {
-        console.error('Error ending quiz:', error);
-        res.status(500).json({ success: false, message: error.message });
+        console.error('Error ending quiz:', {
+            error: error.message,
+            stack: error.stack,
+            quizId: req.params.id
+        });
+        res.status(500).json({ 
+            success: false, 
+            message: error.message,
+            details: error.stack
+        });
     }
 };
 

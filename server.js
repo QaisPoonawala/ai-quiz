@@ -152,14 +152,16 @@ io.on('connection', (socket) => {
 
             const isCorrect = currentQuestion.options[answer].isCorrect === 1;
             
-            // Calculate points based on time taken (max 1000 points)
-            // If correct: points = max(100, 1000 - (timeTaken/timeLimit * 900))
-            // This ensures minimum 100 points for correct answers, scaling up to 1000 based on speed
+            // Calculate points based on time taken (max 100 points)
+            // If correct: points = max(10, 100 - (timeTaken/timeLimit * 90))
+            // This ensures minimum 10 points for correct answers, scaling up to 100 based on speed
             const timeLimit = currentQuestion.timeLimit || 30; // default 30 seconds if not specified
-            const points = isCorrect ? Math.max(
-                100,
-                Math.round(1000 - ((timeTaken / timeLimit) * 900))
-            ) : 0;
+            let points = 0;
+            if (isCorrect) {
+                const timeRatio = Math.min(timeTaken / timeLimit, 1); // Cap at 1 to prevent negative points
+                points = Math.round(100 - (timeRatio * 90)); // Scales from 100 down to 10
+                points = Math.max(10, points); // Ensure minimum 10 points for correct answers
+            }
 
             console.log('Processing answer:', {
                 questionIndex: quiz.currentQuestion,

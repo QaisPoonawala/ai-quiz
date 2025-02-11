@@ -71,28 +71,43 @@ class Participant {
     }
 
     static async update(id, updateData) {
-        const updateExpressions = [];
-        const expressionAttributeNames = {};
-        const expressionAttributeValues = {};
+        try {
+            console.log('Updating participant:', {
+                id,
+                updateData: JSON.stringify(updateData, null, 2)
+            });
 
-        Object.entries(updateData).forEach(([key, value]) => {
-            if (value !== undefined) {
-                updateExpressions.push(`#${key} = :${key}`);
-                expressionAttributeNames[`#${key}`] = key;
-                expressionAttributeValues[`:${key}`] = value;
-            }
-        });
+            const updateExpressions = [];
+            const expressionAttributeNames = {};
+            const expressionAttributeValues = {};
 
-        const response = await docClient.send(new UpdateCommand({
-            TableName: this.tableName,
-            Key: { id },
-            UpdateExpression: `SET ${updateExpressions.join(', ')}`,
-            ExpressionAttributeNames: expressionAttributeNames,
-            ExpressionAttributeValues: expressionAttributeValues,
-            ReturnValues: 'ALL_NEW'
-        }));
+            Object.entries(updateData).forEach(([key, value]) => {
+                if (value !== undefined) {
+                    updateExpressions.push(`#${key} = :${key}`);
+                    expressionAttributeNames[`#${key}`] = key;
+                    expressionAttributeValues[`:${key}`] = value;
+                }
+            });
 
-        return response.Attributes;
+            const params = {
+                TableName: this.tableName,
+                Key: { id },
+                UpdateExpression: `SET ${updateExpressions.join(', ')}`,
+                ExpressionAttributeNames: expressionAttributeNames,
+                ExpressionAttributeValues: expressionAttributeValues,
+                ReturnValues: 'ALL_NEW'
+            };
+
+            console.log('DynamoDB update params:', JSON.stringify(params, null, 2));
+
+            const response = await docClient.send(new UpdateCommand(params));
+            console.log('DynamoDB update response:', JSON.stringify(response.Attributes, null, 2));
+
+            return response.Attributes;
+        } catch (error) {
+            console.error('Error updating participant:', error);
+            throw error;
+        }
     }
 
     static async addAnswer(id, answer) {

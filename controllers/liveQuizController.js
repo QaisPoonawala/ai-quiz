@@ -185,7 +185,8 @@ exports.submitAnswer = async (req, res) => {
         }
 
         const selectedOption = currentQuestion.options[answer];
-        const isCorrect = selectedOption.isCorrect === 1;
+        // Check if isCorrect is either 1 or true
+        const isCorrect = selectedOption.isCorrect === 1 || selectedOption.isCorrect === true;
 
         console.log('Processing answer:', {
             questionIndex: quiz.currentQuestion,
@@ -194,23 +195,39 @@ exports.submitAnswer = async (req, res) => {
             isCorrect,
             timeTaken
         });
-        // Calculate points based on time taken (max 1000 points)
-        // If correct: points = max(100, 1000 - (timeTaken/timeLimit * 900))
-        // This ensures minimum 100 points for correct answers, scaling up to 1000 based on speed
-        const timeLimit = currentQuestion.timeLimit || 30; // default 30 seconds if not specified
-        const points = isCorrect ? Math.max(
-            100,
-            Math.round(1000 - ((timeTaken / timeLimit) * 900))
-        ) : 0;
 
-        console.log('Calculating points:', {
+        // Calculate points (max 100)
+        const timeLimit = currentQuestion.timeLimit || 30; // default 30 seconds if not specified
+        let points = 0;
+        if (isCorrect) {
+            // For correct answers:
+            // - If answered immediately (timeTaken = 0), get 100 points
+            // - If answered at timeLimit, get 10 points
+            // - Linear scale between these points
+            const timeRatio = Math.min(timeTaken / timeLimit, 1); // Cap at 1 to prevent negative points
+            points = Math.round(100 - (timeRatio * 90)); // Scales from 100 down to 10
+            points = Math.max(10, points); // Ensure minimum 10 points for correct answers
+        }
+
+        console.log('Points calculation:', {
             isCorrect,
             timeTaken,
             timeLimit,
-            points
+            timeRatio: timeTaken / timeLimit,
+            calculatedPoints: points,
+            finalPoints: points
         });
 
-        // Update participant
+        // Update participant with new answer and score
+        const currentScore = participant.score || 0;
+        const newScore = currentScore + points;
+        console.log('Score update:', {
+            participantId: participant.id,
+            oldScore: currentScore,
+            pointsToAdd: points,
+            newScore: newScore
+        });
+
         const newAnswer = {
             questionIndex: quiz.currentQuestion,
             answeredAt: new Date().toISOString(),
@@ -220,11 +237,17 @@ exports.submitAnswer = async (req, res) => {
             answer // Store which option was selected
         };
 
-        await Participant.update(participant.id, {
-            answers: [...(participant.answers || []), newAnswer],
-            score: (participant.score || 0) + points,
-            lastActive: new Date().toISOString()
-        });
+        try {
+            await Participant.update(participant.id, {
+                answers: [...(participant.answers || []), newAnswer],
+                score: newScore,
+                lastActive: new Date().toISOString()
+            });
+            console.log('Successfully updated participant score in DynamoDB');
+        } catch (error) {
+            console.error('Error updating participant:', error);
+            throw error;
+        }
 
         // Get updated leaderboard data
         const allParticipants = await Participant.findByQuizId(quiz.id);

@@ -321,7 +321,8 @@ async function startLiveQuiz(id) {
             document.getElementById('sessionCode').textContent = data.data.sessionCode;
             document.getElementById('currentQuestionNumber').textContent = '0';
             document.getElementById('nextQuestionBtn').textContent = 'Start Quiz';
-            document.getElementById('downloadReportBtn').style.display = 'none';
+            // Show control buttons
+            document.getElementById('downloadReportBtn').style.display = 'block';
             document.getElementById('endQuizBtn').style.display = 'block';
             
             socket.emit('host-quiz', { quizId: id });
@@ -377,27 +378,42 @@ async function endQuiz() {
     }
 
     try {
-        // First get the final leaderboard
-        const response = await fetch(`/api/live/leaderboard/${currentQuizId}`);
-        const data = await response.json();
-        
-        if (data.success) {
-            const leaderboard = data.data;
-            
-            // Download report
-            await downloadReport();
-            
-            // Show winners
-            document.getElementById('liveQuizControl').style.display = 'none';
-            showWinners(leaderboard);
-            currentQuizId = null;
+        console.log('Ending quiz:', currentQuizId);
 
-            // Reset quiz state
-            socket.emit('quiz-ended', { quizId: currentQuizId });
-        } else {
-            console.error('End quiz failed:', data);
-            alert(`Error ending quiz: ${data.error || 'Unknown error'}`);
+        // End the quiz and get final data
+        const endResponse = await fetch(`/api/quiz/${currentQuizId}/end`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+        const endData = await endResponse.json();
+        
+        if (!endData.success) {
+            throw new Error('Failed to end quiz');
         }
+        
+        console.log('Quiz ended successfully:', endData);
+
+        // Hide quiz control panel
+        document.getElementById('liveQuizControl').style.display = 'none';
+
+        // Show winners using the winners data from the end quiz response
+        showWinners(endData.data.winners);
+        
+        // Wait 3 seconds before downloading report
+        console.log('Waiting to download report...');
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        
+        // Download report
+        console.log('Downloading report...');
+        await downloadReport();
+        
+        // Reset quiz state
+        socket.emit('quiz-ended', { quizId: currentQuizId });
+        currentQuizId = null;
+
+        console.log('Quiz end process completed');
     } catch (error) {
         console.error('Error ending quiz:', error);
         alert('Error ending quiz. Please check the console for details.');
@@ -644,56 +660,84 @@ async function deleteQuiz(id) {
 }
 
 function showWinners(leaderboard) {
-    const modal = document.getElementById('winnersModal');
-    const firstPlace = document.getElementById('firstPlace');
-    const secondPlace = document.getElementById('secondPlace');
-    const thirdPlace = document.getElementById('thirdPlace');
-    const totalParticipants = document.getElementById('totalParticipants');
+    try {
+        console.log('Showing winners with leaderboard:', leaderboard);
+        
+        const modal = document.getElementById('winnersModal');
+        if (!modal) {
+            throw new Error('Winners modal element not found');
+        }
 
-    // Sort leaderboard by score
-    leaderboard.sort((a, b) => b.score - a.score);
+        const firstPlace = document.getElementById('firstPlace');
+        const secondPlace = document.getElementById('secondPlace');
+        const thirdPlace = document.getElementById('thirdPlace');
+        const totalParticipants = document.getElementById('totalParticipants');
 
-    // Update total participants
-    totalParticipants.textContent = `Total Participants: ${leaderboard.length}`;
+        if (!firstPlace || !secondPlace || !thirdPlace || !totalParticipants) {
+            throw new Error('Required winner elements not found');
+        }
 
-    // Update winners with rankings
-    if (leaderboard.length > 0) {
-        firstPlace.querySelector('.winner-name').textContent = leaderboard[0].name;
-        firstPlace.querySelector('.winner-score').textContent = `Score: ${leaderboard[0].score}`;
-        firstPlace.querySelector('.winner-rank').textContent = `Rank: 1/${leaderboard.length}`;
-        firstPlace.classList.add('show');
+        // Reset previous winners
+        [firstPlace, secondPlace, thirdPlace].forEach(place => {
+            place.classList.remove('show');
+            place.querySelector('.winner-name').textContent = '';
+            place.querySelector('.winner-score').textContent = '';
+            place.querySelector('.winner-rank').textContent = '';
+        });
+
+        // Sort leaderboard by score
+        const sortedLeaderboard = [...leaderboard].sort((a, b) => b.score - a.score);
+        console.log('Sorted leaderboard:', sortedLeaderboard);
+
+        // Update total participants
+        totalParticipants.textContent = `Total Participants: ${leaderboard.length}`;
+
+        // Update winners with rankings
+        if (sortedLeaderboard.length > 0) {
+            firstPlace.querySelector('.winner-name').textContent = sortedLeaderboard[0].name;
+            firstPlace.querySelector('.winner-score').textContent = `Score: ${sortedLeaderboard[0].score}`;
+            firstPlace.querySelector('.winner-rank').textContent = `Rank: 1/${sortedLeaderboard.length}`;
+            firstPlace.classList.add('show');
+        }
+
+        if (sortedLeaderboard.length > 1) {
+            secondPlace.querySelector('.winner-name').textContent = sortedLeaderboard[1].name;
+            secondPlace.querySelector('.winner-score').textContent = `Score: ${sortedLeaderboard[1].score}`;
+            secondPlace.querySelector('.winner-rank').textContent = `Rank: 2/${sortedLeaderboard.length}`;
+            secondPlace.classList.add('show');
+        }
+
+        if (sortedLeaderboard.length > 2) {
+            thirdPlace.querySelector('.winner-name').textContent = sortedLeaderboard[2].name;
+            thirdPlace.querySelector('.winner-score').textContent = `Score: ${sortedLeaderboard[2].score}`;
+            thirdPlace.querySelector('.winner-rank').textContent = `Rank: 3/${sortedLeaderboard.length}`;
+            thirdPlace.classList.add('show');
+        }
+
+        // Add full leaderboard
+        const leaderboardList = document.getElementById('fullLeaderboard');
+        if (leaderboardList) {
+            leaderboardList.innerHTML = sortedLeaderboard
+                .map((participant, index) => `
+                    <div class="leaderboard-entry ${index < 3 ? 'top-three' : ''}">
+                        <span class="rank">${index + 1}</span>
+                        <span class="name">${participant.name}</span>
+                        <span class="score">${participant.score}</span>
+                        <div class="stats">
+                            <span class="answered">${participant.answeredQuestions || 0} answered</span>
+                            <span class="correct">${participant.correctAnswers || 0} correct</span>
+                        </div>
+                    </div>
+                `).join('');
+        }
+
+        // Show modal
+        modal.style.display = 'block';
+        console.log('Winners modal displayed successfully');
+    } catch (error) {
+        console.error('Error showing winners:', error);
+        alert('Error displaying winners. Please check the console for details.');
     }
-
-    if (leaderboard.length > 1) {
-        secondPlace.querySelector('.winner-name').textContent = leaderboard[1].name;
-        secondPlace.querySelector('.winner-score').textContent = `Score: ${leaderboard[1].score}`;
-        secondPlace.querySelector('.winner-rank').textContent = `Rank: 2/${leaderboard.length}`;
-        secondPlace.classList.add('show');
-    }
-
-    if (leaderboard.length > 2) {
-        thirdPlace.querySelector('.winner-name').textContent = leaderboard[2].name;
-        thirdPlace.querySelector('.winner-score').textContent = `Score: ${leaderboard[2].score}`;
-        thirdPlace.querySelector('.winner-rank').textContent = `Rank: 3/${leaderboard.length}`;
-        thirdPlace.classList.add('show');
-    }
-
-    // Add full leaderboard
-    const leaderboardList = document.getElementById('fullLeaderboard');
-    leaderboardList.innerHTML = leaderboard
-        .map((participant, index) => `
-            <div class="leaderboard-entry ${index < 3 ? 'top-three' : ''}">
-                <span class="rank">${index + 1}</span>
-                <span class="name">${participant.name}</span>
-                <span class="score">${participant.score}</span>
-                <div class="stats">
-                    <span class="answered">${participant.answeredQuestions} answered</span>
-                    <span class="correct">${participant.correctAnswers} correct</span>
-                </div>
-            </div>
-        `).join('');
-
-    modal.style.display = 'block';
 }
 
 function closeWinnersModal() {
