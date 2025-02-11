@@ -21,7 +21,7 @@ exports.startLiveQuiz = async (req, res) => {
 
         const sessionCode = uuidv4().substring(0, 6).toUpperCase();
         const updatedQuiz = await Quiz.findByIdAndUpdate(req.params.id, {
-            isLive: true,
+            isLive: 1,
             currentQuestion: -1,
             sessionCode: sessionCode,
             participants: []
@@ -50,7 +50,7 @@ exports.joinQuiz = async (req, res) => {
             FilterExpression: 'sessionCode = :sessionCode and isLive = :isLive',
             ExpressionAttributeValues: {
                 ':sessionCode': sessionCode,
-                ':isLive': true
+                ':isLive': 1
             }
         }));
         const quizzes = response.Items;
@@ -70,7 +70,7 @@ exports.joinQuiz = async (req, res) => {
             quizId: quiz.id,
             score: 0,
             answers: [],
-            connected: true,
+            connected: 1,
             lastActive: new Date().toISOString()
         };
         await Participant.create(participant);
@@ -97,7 +97,7 @@ exports.joinQuiz = async (req, res) => {
 exports.nextQuestion = async (req, res) => {
     try {
         const quiz = await Quiz.findById(req.params.id);
-        if (!quiz || !quiz.isLive) {
+        if (!quiz || quiz.isLive !== 1) {
             return res.status(404).json({ success: false, error: 'Live quiz not found' });
         }
 
@@ -106,9 +106,9 @@ exports.nextQuestion = async (req, res) => {
 
         if (currentQuestion >= quiz.questions.length) {
             await Quiz.findByIdAndUpdate(req.params.id, {
-                isLive: false,
+                isLive: 0,
                 currentQuestion: -1,
-                sessionCode: null
+                sessionCode: ''
             });
             return res.status(200).json({ success: true, finished: true });
         }
@@ -126,7 +126,7 @@ exports.nextQuestion = async (req, res) => {
                 name: p.name,
                 score: p.score || 0,
                 answeredQuestions: (p.answers || []).length,
-                correctAnswers: (p.answers || []).filter(a => a.isCorrect).length
+                correctAnswers: (p.answers || []).filter(a => a.isCorrect === 1).length
             }))
             .sort((a, b) => b.score - a.score);
 
@@ -168,7 +168,7 @@ exports.submitAnswer = async (req, res) => {
 
         // Get quiz
         const quiz = await Quiz.findById(participant.quizId);
-        if (!quiz || !quiz.isLive) {
+        if (!quiz || quiz.isLive !== 1) {
             return res.status(400).json({ success: false, error: 'Quiz is not live' });
         }
 
@@ -179,20 +179,50 @@ exports.submitAnswer = async (req, res) => {
             return res.status(400).json({ success: false, error: 'Time limit exceeded' });
         }
 
-        const isCorrect = currentQuestion.options[answer].isCorrect;
-        const scoreIncrement = isCorrect ? Math.max(10, Math.floor(20 - timeTaken)) : 0;
+        // Validate answer index
+        if (answer < 0 || answer >= currentQuestion.options.length) {
+            return res.status(400).json({ success: false, error: 'Invalid answer index' });
+        }
+
+        const selectedOption = currentQuestion.options[answer];
+        const isCorrect = selectedOption.isCorrect === 1;
+
+        console.log('Processing answer:', {
+            questionIndex: quiz.currentQuestion,
+            answerIndex: answer,
+            optionSelected: selectedOption,
+            isCorrect,
+            timeTaken
+        });
+        // Calculate points based on time taken (max 1000 points)
+        // If correct: points = max(100, 1000 - (timeTaken/timeLimit * 900))
+        // This ensures minimum 100 points for correct answers, scaling up to 1000 based on speed
+        const timeLimit = currentQuestion.timeLimit || 30; // default 30 seconds if not specified
+        const points = isCorrect ? Math.max(
+            100,
+            Math.round(1000 - ((timeTaken / timeLimit) * 900))
+        ) : 0;
+
+        console.log('Calculating points:', {
+            isCorrect,
+            timeTaken,
+            timeLimit,
+            points
+        });
 
         // Update participant
         const newAnswer = {
             questionIndex: quiz.currentQuestion,
             answeredAt: new Date().toISOString(),
-            isCorrect,
-            timeTaken
+            isCorrect: isCorrect ? 1 : 0,
+            timeTaken,
+            points,
+            answer // Store which option was selected
         };
 
         await Participant.update(participant.id, {
             answers: [...(participant.answers || []), newAnswer],
-            score: (participant.score || 0) + scoreIncrement,
+            score: (participant.score || 0) + points,
             lastActive: new Date().toISOString()
         });
 
@@ -204,7 +234,7 @@ exports.submitAnswer = async (req, res) => {
                 name: p.name,
                 score: p.score || 0,
                 answeredQuestions: (p.answers || []).length,
-                correctAnswers: (p.answers || []).filter(a => a.isCorrect).length
+                correctAnswers: (p.answers || []).filter(a => a.isCorrect === 1).length
             }))
             .sort((a, b) => b.score - a.score);
 
@@ -218,10 +248,18 @@ exports.submitAnswer = async (req, res) => {
         res.status(200).json({ 
             success: true, 
             data: { 
-                isCorrect, 
+                isCorrect: isCorrect ? 1 : 0, 
+                points,
                 score: updatedParticipant.score || 0,
                 leaderboard: leaderboardData
             } 
+        });
+
+        console.log('Answer submitted:', {
+            participantId: participant.id,
+            score: updatedParticipant.score,
+            points,
+            isCorrect
         });
     } catch (error) {
         res.status(400).json({ success: false, error: error.message });
@@ -244,7 +282,7 @@ exports.getLeaderboard = async (req, res) => {
                 name: p.name,
                 score: p.score || 0,
                 answeredQuestions: (p.answers || []).length,
-                correctAnswers: (p.answers || []).filter(a => a.isCorrect).length
+                correctAnswers: (p.answers || []).filter(a => a.isCorrect === 1).length
             }))
             .sort((a, b) => b.score - a.score);
 
@@ -274,7 +312,7 @@ exports.generateReport = async (req, res) => {
             'Participant Name': p.name,
             'Total Score': p.score,
             'Questions Attempted': p.answers.length,
-            'Correct Answers': p.answers.filter(a => a.isCorrect).length,
+            'Correct Answers': p.answers.filter(a => a.isCorrect === 1).length,
             'Average Time per Question': p.answers.reduce((acc, curr) => acc + curr.timeTaken, 0) / p.answers.length
         }));
 
@@ -283,7 +321,7 @@ exports.generateReport = async (req, res) => {
                 p.answers.some(a => a.questionIndex === idx)
             ).length;
             const correct = quiz.participants.filter(p =>
-                p.answers.some(a => a.questionIndex === idx && a.isCorrect)
+                p.answers.some(a => a.questionIndex === idx && a.isCorrect === 1)
             ).length;
 
             return {

@@ -14,7 +14,7 @@ class Participant {
             score: 0,
             answers: [],
             lastActive: new Date().toISOString(),
-            connected: true,
+            connected: 1,
             socketId: participantData.socketId
         };
 
@@ -113,7 +113,7 @@ class Participant {
             Key: { id },
             UpdateExpression: 'SET connected = :connected, lastActive = :lastActive',
             ExpressionAttributeValues: {
-                ':connected': connected,
+                ':connected': connected ? 1 : 0,
                 ':lastActive': new Date().toISOString()
             }
         }));

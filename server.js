@@ -94,14 +94,14 @@ io.on('connection', (socket) => {
             }
 
             const quiz = await Quiz.findById(participant.quizId);
-            if (!quiz || !quiz.isLive) {
+            if (!quiz || quiz.isLive !== 1) {
                 socket.emit('error', 'Quiz not active');
                 return;
             }
 
             socket.join(quiz.id.toString());
             await Participant.update(participant.id, { 
-                connected: true, 
+                connected: 1, 
                 socketId: socket.id 
             });
 
@@ -137,29 +137,59 @@ io.on('connection', (socket) => {
             }
 
             const quiz = await Quiz.findById(participant.quizId);
-            if (!quiz || !quiz.isLive) {
+            if (!quiz || quiz.isLive !== 1) {
                 socket.emit('error', 'Quiz not active');
                 return;
             }
 
             const currentQuestion = quiz.questions[quiz.currentQuestion];
-            const isCorrect = currentQuestion.options[answer].isCorrect;
+            
+            // Validate answer index
+            if (answer < 0 || answer >= currentQuestion.options.length) {
+                socket.emit('error', 'Invalid answer index');
+                return;
+            }
+
+            const isCorrect = currentQuestion.options[answer].isCorrect === 1;
             
             // Calculate points based on time taken (max 1000 points)
+            // If correct: points = max(100, 1000 - (timeTaken/timeLimit * 900))
+            // This ensures minimum 100 points for correct answers, scaling up to 1000 based on speed
+            const timeLimit = currentQuestion.timeLimit || 30; // default 30 seconds if not specified
             const points = isCorrect ? Math.max(
                 100,
-                Math.round(1000 - ((timeTaken / currentQuestion.timeLimit) * 900))
+                Math.round(1000 - ((timeTaken / timeLimit) * 900))
             ) : 0;
+
+            console.log('Processing answer:', {
+                questionIndex: quiz.currentQuestion,
+                answerIndex: answer,
+                optionSelected: currentQuestion.options[answer],
+                isCorrect,
+                timeTaken,
+                timeLimit,
+                points
+            });
 
             // Update participant score and answers
             const newScore = (participant.score || 0) + points;
+            // Store answer with points
             const newAnswer = {
                 questionIndex: quiz.currentQuestion,
                 answeredAt: new Date().toISOString(),
+                isCorrect: isCorrect ? 1 : 0,
+                timeTaken,
+                points,
+                answer // Store which option was selected
+            };
+
+            console.log('Submitting answer:', {
                 isCorrect,
                 timeTaken,
-                points
-            };
+                points,
+                answer,
+                questionIndex: quiz.currentQuestion
+            });
 
             await Participant.update(participant.id, {
                 score: newScore,
@@ -173,11 +203,28 @@ io.on('connection', (socket) => {
                     name: p.name,
                     score: p.score || 0,
                     answeredQuestions: (p.answers || []).length,
-                    correctAnswers: (p.answers || []).filter(a => a.isCorrect).length
+                    correctAnswers: (p.answers || []).filter(a => a.isCorrect === 1).length
                 }))
                 .sort((a, b) => b.score - a.score);
 
+            // Emit both leaderboard update and answer result
             io.to(quiz.id.toString()).emit('leaderboard-update', leaderboard);
+            socket.emit('answer-result', {
+                isCorrect: isCorrect ? 1 : 0,
+                points,
+                score: newScore,
+                totalScore: newScore // Include total score for display
+            });
+
+            // Log the points being awarded
+            console.log('Points awarded:', {
+                participantId: participant.id,
+                questionIndex: quiz.currentQuestion,
+                isCorrect,
+                timeTaken,
+                points,
+                newTotalScore: newScore
+            });
 
         } catch (error) {
             socket.emit('error', error.message);
@@ -190,7 +237,7 @@ io.on('connection', (socket) => {
             const participant = participants[0];
             if (participant) {
                 await Participant.update(participant.id, { 
-                    connected: false, 
+                    connected: 0, 
                     lastActive: new Date().toISOString() 
                 });
 

@@ -8,7 +8,9 @@ const {
     deleteQuiz,
     getArchivedQuizzes,
     exportQuizResults,
-    copyQuiz
+    copyQuiz,
+    startQuiz,
+    endQuiz
 } = require('../controllers/quizController');
 
 // Main quiz routes
@@ -20,6 +22,8 @@ router.route('/')
 router.get('/archived', getArchivedQuizzes);
 router.get('/:id/export', exportQuizResults);
 router.post('/:id/copy', copyQuiz);
+router.post('/:id/start', startQuiz);
+router.post('/:id/end', endQuiz);
 
 // Individual quiz routes
 router.route('/:id')

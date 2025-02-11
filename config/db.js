@@ -4,31 +4,13 @@ require('dotenv').config();
 
 // Configure AWS credentials and region
 const config = {
-    region: process.env.AWS_REGION || 'us-east-1'
-};
-
-// Add credentials for non-local environments
-if (process.env.NODE_ENV !== 'development') {
-    if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
-        console.error('Missing AWS credentials. Please set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY');
-        process.exit(1);
+    endpoint: 'http://localhost:8000',
+    region: 'local',
+    credentials: {
+        accessKeyId: 'dummy',
+        secretAccessKey: 'dummy'
     }
-    
-    config.credentials = {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
-    };
-}
-
-// Add endpoint for local development
-if (process.env.NODE_ENV === 'development') {
-    config.endpoint = process.env.DYNAMODB_ENDPOINT || 'http://localhost:8000';
-    // For local development, we can use dummy credentials
-    config.credentials = {
-        accessKeyId: 'local',
-        secretAccessKey: 'local'
-    };
-}
+};
 
 // Create DynamoDB client with enhanced logging
 const client = new DynamoDBClient({

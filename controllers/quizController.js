@@ -1,4 +1,5 @@
 const Quiz = require('../models/Quiz');
+const Participant = require('../models/Participant');
 const xlsx = require('xlsx');
 const path = require('path');
 
@@ -98,7 +99,7 @@ exports.copyQuiz = async (req, res) => {
 exports.getQuizzes = async (req, res) => {
     try {
         console.log('Getting all quizzes');
-        const quizzes = await Quiz.find({ archived: false });
+        const quizzes = await Quiz.find({ archived: 0 });
         console.log('Found quizzes:', quizzes);
         res.status(200).json({
             success: true,
@@ -117,7 +118,7 @@ exports.getQuizzes = async (req, res) => {
 // Get archived quizzes
 exports.getArchivedQuizzes = async (req, res) => {
     try {
-        const quizzes = await Quiz.find({ archived: true });
+        const quizzes = await Quiz.find({ archived: 1 });
         res.status(200).json({
             success: true,
             count: quizzes.length,
@@ -234,15 +235,29 @@ exports.endQuiz = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Quiz not found' });
         }
 
-        // Archive current participants' results with their answers
-        const currentResults = quiz.activeParticipants.map(participant => ({
-            participantName: participant.name,
-            score: participant.score,
+        // Get all participants for this quiz
+        console.log('Getting participants for quiz:', quiz.id);
+        const participants = await Participant.findByQuizId(quiz.id);
+        console.log('Found participants:', participants);
+        
+        // Archive participants' results with their answers
+        const currentResults = participants.map(participant => ({
+            participantName: participant.name || '',
+            score: participant.score || 0,
             completedAt: new Date().toISOString(),
-            answers: participant.answers
+            answers: (participant.answers || []).map(answer => ({
+                questionIndex: answer.questionIndex,
+                answeredAt: answer.answeredAt,
+                isCorrect: answer.isCorrect,
+                timeTaken: answer.timeTaken,
+                points: answer.points || 0,
+                answer: answer.answer // Include which option was selected
+            }))
         }));
 
+        console.log('Archiving results:', currentResults);
         const updatedQuiz = await Quiz.endQuiz(req.params.id, currentResults);
+        console.log('Quiz ended successfully:', updatedQuiz);
 
         res.json({ success: true, data: updatedQuiz });
     } catch (error) {

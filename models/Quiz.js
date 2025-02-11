@@ -21,13 +21,13 @@ class Quiz {
                 textColor: '#333333',
                 accentColor: '#007bff'
             },
-            questions: quizData.questions || [],
-            isLive: false,
+            questions: quizData.questions ? JSON.parse(JSON.stringify(quizData.questions)) : [],
+            isLive: 0,
             currentQuestion: -1,
-            sessionCode: null,
+            sessionCode: '',
             participants: [],
             createdAt: new Date().toISOString(),
-            archived: false,
+            archived: 0,
             activeParticipants: [],
             archivedResults: []
         };
@@ -148,8 +148,8 @@ class Quiz {
                 Key: { id },
                 UpdateExpression: 'SET isLive = :isLive, sessionCode = :sessionCode, currentQuestion = :currentQuestion, activeParticipants = :activeParticipants',
                 ExpressionAttributeValues: {
-                    ':isLive': true,
-                    ':sessionCode': sessionCode,
+                    ':isLive': 1,
+                    ':sessionCode': sessionCode || '',
                     ':currentQuestion': -1,
                     ':activeParticipants': []
                 },
@@ -167,20 +167,31 @@ class Quiz {
 
     static async endQuiz(id, results) {
         try {
+            // First get the current quiz to merge results
+            const quiz = await this.findById(id);
+            if (!quiz) {
+                throw new Error('Quiz not found');
+            }
+
+            // Merge existing archived results with new results
+            const existingResults = quiz.archivedResults || [];
+            const updatedResults = [...existingResults, ...results];
+
             const params = {
                 TableName: this.tableName,
                 Key: { id },
-                UpdateExpression: 'SET isLive = :isLive, sessionCode = :sessionCode, currentQuestion = :currentQuestion, activeParticipants = :activeParticipants, archivedResults = list_append(if_not_exists(archivedResults, :emptyList), :results)',
+                UpdateExpression: 'SET isLive = :isLive, sessionCode = :sessionCode, currentQuestion = :currentQuestion, activeParticipants = :activeParticipants, archivedResults = :results',
                 ExpressionAttributeValues: {
-                    ':isLive': false,
-                    ':sessionCode': null,
+                    ':isLive': 0,
+                    ':sessionCode': '',
                     ':currentQuestion': -1,
                     ':activeParticipants': [],
-                    ':results': results,
-                    ':emptyList': []
+                    ':results': updatedResults
                 },
                 ReturnValues: 'ALL_NEW'
             };
+
+            console.log('Ending quiz with params:', JSON.stringify(params, null, 2));
 
             const command = new UpdateCommand(params);
             const response = await docClient.send(command);
