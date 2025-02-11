@@ -401,14 +401,6 @@ async function endQuiz() {
         // Show winners using the winners data from the end quiz response
         showWinners(endData.data.winners);
         
-        // Wait 3 seconds before downloading report
-        console.log('Waiting to download report...');
-        await new Promise(resolve => setTimeout(resolve, 3000));
-        
-        // Download report
-        console.log('Downloading report...');
-        await downloadReport();
-        
         // Reset quiz state
         socket.emit('quiz-ended', { quizId: currentQuizId });
         currentQuizId = null;

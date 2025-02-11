@@ -190,10 +190,32 @@ button, .button {
     color: #666;
 }
 
-.close-winners {
+.winners-actions {
     margin-top: 30px;
+    display: flex;
+    gap: 15px;
+    justify-content: center;
+}
+
+.winners-actions button {
     padding: 12px 30px;
     font-size: 1.1em;
+}
+
+.download-report {
+    background-color: #28a745;
+}
+
+.download-report:hover {
+    background-color: #218838;
+}
+
+.close-winners {
+    background-color: #6c757d;
+}
+
+.close-winners:hover {
+    background-color: #5a6268;
 }
 
 /* QR Code */
