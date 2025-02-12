@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Join Quiz</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Join Live Quiz</h1>
+        </header>
+
+        <!-- Join Quiz Form -->
+        <div class="section">
+            <form id="joinForm">
+                <div class="form-group">
+                    <label>Session Code:</label>
+                    <input type="text" id="sessionCode" required placeholder="Enter 6-digit code">
+                </div>
+                <div class="form-group">
+                    <label>Your Name:</label>
+                    <input type="text" id="participantName" required placeholder="Enter your name">
+                </div>
+                <button type="submit">Join Quiz</button>
+            </form>
+        </div>
+
+        <!-- Quiz Section (Initially Hidden) -->
+        <div id="quizSection" class="section" style="display: none;">
+            <div class="quiz-layout">
+                <div class="quiz-main">
+                    <div id="waitingMessage">
+                        Waiting for quiz to start...
+                    </div>
+                    <div id="questionContainer" style="display: none;">
+                        <h2 id="questionText"></h2>
+                        <div id="timer"></div>
+                        <div id="options"></div>
+                    </div>
+                </div>
+                <div class="quiz-sidebar">
+                    <div id="leaderboard">
+                        <h3>Leaderboard</h3>
+                        <div id="leaderboardList"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <style>
+            .quiz-layout {
+                display: flex;
+                gap: 20px;
+            }
+            .quiz-main {
+                flex: 2;
+            }
+            .quiz-sidebar {
+                flex: 1;
+                padding: 15px;
+                background: #f5f5f5;
+                border-radius: 8px;
+            }
+            .leaderboard-entry {
+                display: flex;
+                justify-content: space-between;
+                padding: 8px;
+                border-bottom: 1px solid #ddd;
+            }
+            .leaderboard-entry:last-child {
+                border-bottom: none;
+            }
+            .rank {
+                font-weight: bold;
+                margin-right: 10px;
+            }
+            .score {
+                font-weight: bold;
+                color: #007bff;
+            }
+        </style>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        let sessionId = null;
+        let currentQuestion = -1;
+        let hasAnswered = false;
+
+        document.getElementById('joinForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const sessionCode = document.getElementById('sessionCode').value.toUpperCase();
+            const name = document.getElementById('participantName').value;
+
+            try {
+                const response = await fetch('/api/live/join', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ sessionCode, name })
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    sessionId = data.data.sessionId;
+                    document.getElementById('joinForm').style.display = 'none';
+                    document.getElementById('quizSection').style.display = 'block';
+                    socket.emit('join-quiz', { sessionId });
+                } else {
+                    alert('Failed to join quiz: ' + data.error);
+                }
+            } catch (error) {
+                alert('Error joining quiz');
+                console.error(error);
+            }
+        });
+
+        socket.on('quiz-joined', (data) => {
+            currentQuestion = data.currentQuestion;
+            if (currentQuestion >= 0) {
+                showQuestion(data);
+            }
+        });
+
+        socket.on('quiz-reconnected', (data) => {
+            currentQuestion = data.currentQuestion;
+            if (currentQuestion >= 0) {
+                showQuestion(data);
+            }
+        });
+
+        socket.on('new-question', (data) => {
+            hasAnswered = false;
+            showQuestion(data);
+        });
+
+        socket.on('leaderboard-update', (leaderboard) => {
+            const leaderboardDiv = document.getElementById('leaderboard');
+            const leaderboardList = document.getElementById('leaderboardList');
+            leaderboardDiv.style.display = 'block';
+            
+            leaderboardList.innerHTML = leaderboard
+                .map((entry, index) => `
+                    <div class="leaderboard-entry">
+                        <span class="rank">${index + 1}</span>
+                        <span class="name">${entry.name}</span>
+                        <span class="score">${entry.score}</span>
+                    </div>
+                `)
+                .join('');
+        });
+
+        socket.on('quiz-ended', () => {
+            document.getElementById('questionContainer').style.display = 'none';
+            document.getElementById('waitingMessage').textContent = 'Quiz has ended';
+            document.getElementById('waitingMessage').style.display = 'block';
+        });
+
+        socket.on('error', (message) => {
+            alert('Error: ' + message);
+        });
+
+        function showQuestion(data) {
+            const waitingMessage = document.getElementById('waitingMessage');
+            const questionContainer = document.getElementById('questionContainer');
+            const questionText = document.getElementById('questionText');
+            const options = document.getElementById('options');
+            const timer = document.getElementById('timer');
+
+            waitingMessage.style.display = 'none';
+            questionContainer.style.display = 'block';
+            
+            questionText.textContent = data.question.questionText;
+            options.innerHTML = '';
+
+            data.question.options.forEach((option, index) => {
+                const button = document.createElement('button');
+                button.textContent = option.text;
+                button.onclick = () => submitAnswer(index);
+                button.disabled = hasAnswered;
+                options.appendChild(button);
+            });
+
+            // Start timer
+            let timeLeft = data.timeLimit;
+            timer.textContent = `Time left: ${timeLeft}s`;
+            
+            const timerInterval = setInterval(() => {
+                timeLeft--;
+                timer.textContent = `Time left: ${timeLeft}s`;
+                
+                if (timeLeft <= 0 || hasAnswered) {
+                    clearInterval(timerInterval);
+                    options.querySelectorAll('button').forEach(btn => btn.disabled = true);
+                }
+            }, 1000);
+        }
+
+        async function submitAnswer(optionIndex) {
+            if (hasAnswered) return;
+            
+            try {
+                const response = await fetch('/api/live/submit', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        sessionId,
+                        answer: optionIndex
+                    })
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    hasAnswered = true;
+                    document.querySelectorAll('#options button').forEach(btn => btn.disabled = true);
+                }
+            } catch (error) {
+                console.error('Error submitting answer:', error);
+            }
+        }
+
+        // Handle disconnections
+        socket.on('disconnect', () => {
+            console.log('Disconnected from server');
+        });
+
+        socket.on('connect', () => {
+            if (sessionId) {
+                socket.emit('reconnect-quiz', { sessionId });
+            }
+        });
+    </script>
+</body>
+</html>
