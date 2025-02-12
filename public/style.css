@@ -693,6 +693,19 @@ input[type="file"] + label:hover {
     margin-bottom: 20px;
 }
 
+.participant-names {
+    padding: 10px;
+    background-color: #f8f9fa;
+    border-radius: 4px;
+    margin-top: 10px;
+    white-space: pre;
+    overflow-x: auto;
+    font-family: monospace;
+    border: 1px solid #ddd;
+    max-height: 100px;
+    overflow-y: auto;
+}
+
 #questionControl {
     margin-bottom: 20px;
 }

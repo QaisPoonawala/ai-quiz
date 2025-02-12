@@ -1,3 +1,8 @@
+// Global variables
+let currentQuizId = null;
+let lastQuizId = null;
+let allQuizzes = [];
+
 // Function to add a new question to the quiz form
 function addQuestion() {
     const questionsContainer = document.getElementById('questionsContainer');
@@ -112,12 +117,14 @@ function showQuizForm() {
 // Socket connection
 const socket = io();
 
-let currentQuizId = null;
-
 socket.on('participant-count', (data) => {
     const participantCount = document.getElementById('participantNumber');
+    const participantNames = document.getElementById('participantNames');
     if (participantCount) {
         participantCount.textContent = data.count;
+    }
+    if (participantNames && data.participants) {
+        participantNames.textContent = data.participants.map(p => p.name).join('\t');
     }
 });
 
@@ -398,6 +405,9 @@ async function endQuiz() {
         // Hide quiz control panel
         document.getElementById('liveQuizControl').style.display = 'none';
 
+        // Store the quiz ID before resetting currentQuizId
+        lastQuizId = currentQuizId;
+
         // Show winners using the winners data from the end quiz response
         showWinners(endData.data.winners);
         
@@ -414,7 +424,14 @@ async function endQuiz() {
 
 async function downloadReport() {
     try {
-        const response = await fetch(`/api/quiz/${currentQuizId}/export`);
+        // Use lastQuizId if currentQuizId is null
+        const quizId = currentQuizId || lastQuizId;
+        if (!quizId) {
+            throw new Error('No quiz ID available');
+        }
+
+        console.log('Downloading report for quiz:', quizId);
+        const response = await fetch(`/api/quiz/${quizId}/export`);
         const data = await response.json();
         if (data.success) {
             window.open(data.data.downloadUrl, '_blank');

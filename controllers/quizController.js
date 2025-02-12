@@ -331,71 +331,119 @@ exports.endQuiz = async (req, res) => {
 // Export quiz results
 exports.exportQuizResults = async (req, res) => {
     try {
+        console.log('Starting export for quiz ID:', req.params.id);
+        
         const quiz = await Quiz.findById(req.params.id);
+        console.log('Quiz data:', JSON.stringify(quiz, null, 2));
 
         if (!quiz) {
+            console.error('Quiz not found:', req.params.id);
             return res.status(404).json({ success: false, message: 'Quiz not found' });
         }
 
         // Create workbook
         const wb = xlsx.utils.book_new();
         
-        // Participant results worksheet
-        const participantData = quiz.archivedResults.map(result => ({
-            'Participant Name': result.participantName,
-            'Total Score': result.score,
-            'Completed At': new Date(result.completedAt).toLocaleString()
-        }));
-        const participantWs = xlsx.utils.json_to_sheet(participantData);
-        xlsx.utils.book_append_sheet(wb, participantWs, 'Participants');
-
-        // Questions worksheet
-        const questionData = quiz.questions.map((q, idx) => {
-            const questionAnswers = quiz.archivedResults.flatMap(r => 
-                r.answers.filter(a => a.questionIndex === idx)
-            );
+        try {
+            // Participant results worksheet
+            const archivedResults = quiz.archivedResults || [];
+            console.log('Archived results:', JSON.stringify(archivedResults, null, 2));
             
-            return {
-                'Question': q.questionText,
-                'Correct Option': q.options.find(o => o.isCorrect).text,
-                'All Options': q.options.map(o => o.text).join(', '),
-                'Total Attempts': questionAnswers.length,
-                'Correct Answers': questionAnswers.filter(a => a.isCorrect).length,
-                'Average Time (seconds)': Math.round(questionAnswers.reduce((acc, curr) => acc + curr.timeTaken, 0) / questionAnswers.length),
-                'Success Rate': `${Math.round((questionAnswers.filter(a => a.isCorrect).length / questionAnswers.length) * 100)}%`
-            };
-        });
-        const questionWs = xlsx.utils.json_to_sheet(questionData);
-        xlsx.utils.book_append_sheet(wb, questionWs, 'Questions');
+            const participantData = archivedResults.map(result => ({
+                'Participant Name': result.participantName || 'Unknown',
+                'Total Score': result.score || 0,
+                'Completed At': result.completedAt ? new Date(result.completedAt).toLocaleString() : 'N/A'
+            }));
+            const participantWs = xlsx.utils.json_to_sheet(participantData);
+            xlsx.utils.book_append_sheet(wb, participantWs, 'Participants');
 
-        // Detailed answers worksheet
-        const answerData = quiz.archivedResults.flatMap(result => 
-            result.answers.map(answer => ({
-                'Participant': result.participantName,
-                'Question': quiz.questions[answer.questionIndex].questionText,
-                'Answer': quiz.questions[answer.questionIndex].options[answer.answer].text,
-                'Correct': answer.isCorrect ? 'Yes' : 'No',
-                'Time Taken (seconds)': answer.timeTaken,
-                'Points': answer.points
-            }))
-        );
-        const answerWs = xlsx.utils.json_to_sheet(answerData);
-        xlsx.utils.book_append_sheet(wb, answerWs, 'Detailed Answers');
+            // Questions worksheet
+            const questions = quiz.questions || [];
+            console.log('Questions:', JSON.stringify(questions, null, 2));
+            
+            const questionData = questions.map((q, idx) => {
+                const questionAnswers = archivedResults.flatMap(r => 
+                    (r.answers || []).filter(a => a.questionIndex === idx)
+                );
+                
+                const correctOption = q.options.find(o => o.isCorrect === 1 || o.isCorrect === true);
+                
+                return {
+                    'Question': q.questionText || 'Unknown Question',
+                    'Correct Option': correctOption ? correctOption.text : 'N/A',
+                    'All Options': (q.options || []).map(o => o.text).join(', '),
+                    'Total Attempts': questionAnswers.length,
+                    'Correct Answers': questionAnswers.filter(a => a.isCorrect === 1 || a.isCorrect === true).length,
+                    'Average Time (seconds)': questionAnswers.length > 0 ? 
+                        Math.round(questionAnswers.reduce((acc, curr) => acc + (curr.timeTaken || 0), 0) / questionAnswers.length) : 0,
+                    'Success Rate': questionAnswers.length > 0 ? 
+                        `${Math.round((questionAnswers.filter(a => a.isCorrect === 1 || a.isCorrect === true).length / questionAnswers.length) * 100)}%` : '0%'
+                };
+            });
+            const questionWs = xlsx.utils.json_to_sheet(questionData);
+            xlsx.utils.book_append_sheet(wb, questionWs, 'Questions');
+
+            // Detailed answers worksheet
+            const answerData = archivedResults.flatMap(result => 
+                (result.answers || []).map(answer => {
+                    const question = questions[answer.questionIndex] || {};
+                    const option = question.options ? question.options[answer.answer] : null;
+                    
+                    return {
+                        'Participant': result.participantName || 'Unknown',
+                        'Question': question.questionText || 'Unknown Question',
+                        'Answer': option ? option.text : 'Invalid Answer',
+                        'Correct': (answer.isCorrect === 1 || answer.isCorrect === true) ? 'Yes' : 'No',
+                        'Time Taken (seconds)': answer.timeTaken || 0,
+                        'Points': answer.points || 0
+                    };
+                })
+            );
+            const answerWs = xlsx.utils.json_to_sheet(answerData);
+            xlsx.utils.book_append_sheet(wb, answerWs, 'Detailed Answers');
+        } catch (processError) {
+            console.error('Error processing quiz data:', processError);
+            throw new Error(`Error processing quiz data: ${processError.message}`);
+        }
 
         // Generate Excel file
         const filename = `quiz-results-${quiz.id}.xlsx`;
         const filePath = path.join(__dirname, '..', 'public', 'exports', filename);
-        xlsx.writeFile(wb, filePath);
-
-        res.json({
-            success: true,
-            data: {
-                downloadUrl: `/exports/${filename}`
+        console.log('Writing file to:', filePath);
+        
+        try {
+            xlsx.writeFile(wb, filePath);
+            console.log('File written successfully');
+            
+            // Verify file exists
+            const fs = require('fs');
+            if (fs.existsSync(filePath)) {
+                console.log('File exists after writing');
+            } else {
+                console.error('File does not exist after writing');
             }
-        });
+            
+            res.json({
+                success: true,
+                data: {
+                    downloadUrl: `/exports/${filename}`
+                }
+            });
+        } catch (writeError) {
+            console.error('Error writing file:', writeError);
+            throw writeError;
+        }
     } catch (error) {
-        console.error('Error exporting quiz results:', error);
-        res.status(500).json({ success: false, message: error.message });
+        console.error('Error exporting quiz results:', {
+            error: error.message,
+            stack: error.stack,
+            quizId: req.params.id
+        });
+        res.status(500).json({ 
+            success: false, 
+            message: error.message,
+            details: error.stack 
+        });
     }
 };
 

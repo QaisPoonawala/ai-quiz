@@ -80,6 +80,14 @@ exports.joinQuiz = async (req, res) => {
             participants: [...(quiz.participants || []), participantId]
         });
 
+        // Get all participants and emit updated count and names
+        const allParticipants = await Participant.findByQuizId(quiz.id);
+        const io = req.app.get('io');
+        io.to(quiz.id.toString()).emit('participant-count', {
+            count: allParticipants.length,
+            participants: allParticipants.map(p => ({ name: p.name }))
+        });
+
         res.status(200).json({
             success: true,
             data: {
@@ -134,6 +142,15 @@ exports.nextQuestion = async (req, res) => {
 
         // Emit new question and leaderboard to all participants
         const io = req.app.get('io');
+        
+        // Get participant names
+        const participantNames = participants.map(p => ({ name: p.name }));
+        
+        io.to(quiz.id.toString()).emit('participant-count', {
+            count: participants.length,
+            participants: participantNames
+        });
+        
         io.to(quiz.id.toString()).emit('new-question', {
             question: nextQuestion,
             timeLimit: nextQuestion.timeLimit,
