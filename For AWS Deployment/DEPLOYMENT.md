@@ -3,13 +3,30 @@
 ## Prerequisites
 
 1. AWS CLI installed and configured with appropriate credentials
-2. Docker installed locally
+2. Docker and Docker Compose installed locally
 3. An AWS account with necessary permissions
-4. A Docker image of the application pushed to Amazon ECR
+4. Node.js 18 or later installed
+
+## Local Docker Testing
+
+Before deploying to AWS, test the application locally using Docker Compose:
+
+```bash
+# Build and start the containers
+docker-compose up --build
+
+# Verify the application is running
+curl http://localhost:5001/health
+
+# Stop the containers
+docker-compose down
+```
+
+## Building and Pushing Docker Image
 
 ## Step-by-Step Deployment Instructions
 
-### 1. Create an ECR Repository and Push the Docker Image
+### 1. Create an ECR Repository and Build Docker Image
 
 ```bash
 # Create ECR repository
@@ -95,6 +112,48 @@ To delete all resources when no longer needed:
 aws cloudformation delete-stack --stack-name quiz-platform
 aws cloudformation wait stack-delete-complete --stack-name quiz-platform
 ```
+
+## Environment Variables
+
+The following environment variables are automatically configured in the ECS task:
+
+- `NODE_ENV`: Set to 'production'
+- `REDIS_URL`: Auto-configured to use ElastiCache Redis endpoint
+- `REDIS_TLS_ENABLED`: Set to 'true' for secure Redis connection
+- `AWS_REGION`: Set to the deployment region
+- `PORT`: Set to 5001
+- `CORS_ORIGIN`: Set to the ALB DNS name
+- `DYNAMODB_PARTICIPANTS_TABLE`: Set to the Participants table name
+- `DYNAMODB_QUIZZES_TABLE`: Set to the Quizzes table name
+- `SOCKET_PATH`: Set to '/socket.io'
+
+## Service Connectivity
+
+1. **DynamoDB**:
+   - Tables are created with the stack name prefix
+   - ECS tasks have IAM roles for DynamoDB access
+   - Auto-scaling with on-demand capacity
+   - Tables are tagged with "Name: QuizPlatform" for cost tracking
+
+2. **Redis (ElastiCache)**:
+   - Encrypted in transit and at rest
+   - Multi-AZ deployment for high availability
+   - Automatic failover enabled
+   - Runs in private subnets
+   - Connection is secured via security groups
+
+3. **Socket.IO**:
+   - Runs through Application Load Balancer
+   - Supports both WebSocket and long-polling
+   - Automatic reconnection handling
+   - Sticky sessions for connection persistence
+   - Redis adapter for multi-container support
+
+4. **Application Load Balancer**:
+   - Routes traffic to ECS tasks
+   - Health checks ensure container availability
+   - Handles WebSocket connections
+   - Public endpoint for client access
 
 ## Infrastructure Overview
 

@@ -152,6 +152,7 @@ exports.nextQuestion = async (req, res) => {
         });
         
         io.to(quiz.id.toString()).emit('new-question', {
+            currentQuestion,
             question: nextQuestion,
             timeLimit: nextQuestion.timeLimit,
             questionStartTime: questionStartTime

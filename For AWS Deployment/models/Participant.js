@@ -3,7 +3,7 @@ const { docClient } = require('../config/db');
 const { v4: uuidv4 } = require('uuid');
 
 class Participant {
-    static tableName = 'Participants';
+    static tableName = process.env.DYNAMODB_PARTICIPANTS_TABLE;
 
     static async create(participantData) {
         const participant = {

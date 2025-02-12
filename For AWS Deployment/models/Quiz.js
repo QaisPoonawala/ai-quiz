@@ -3,7 +3,7 @@ const { docClient } = require('../config/db');
 const { v4: uuidv4 } = require('uuid');
 
 class Quiz {
-    static tableName = 'Quizzes';
+    static tableName = process.env.DYNAMODB_QUIZZES_TABLE;
 
     static async create(quizData) {
         // Validate input

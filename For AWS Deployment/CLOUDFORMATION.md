@@ -6,9 +6,7 @@ This guide explains how to deploy the xQuizite platform using AWS CloudFormation
 
 1. AWS CLI installed and configured on Windows
 2. Docker Desktop for Windows installed
-3. MongoDB Atlas account
-4. Domain registered in Route 53
-5. PowerShell 5.1 or later
+3. PowerShell 5.1 or later
 
 ## Deployment Steps
 
@@ -37,9 +35,7 @@ aws cloudformation create-stack `
   --stack-name xquizite `
   --template-body file://cloudformation.yaml `
   --parameters `
-    ParameterKey=DomainName,ParameterValue=quiz.yourdomain.com `
     ParameterKey=Environment,ParameterValue=production `
-    ParameterKey=MongoDBUri,ParameterValue='mongodb+srv://...' `
     ParameterKey=ContainerImage,ParameterValue=YOUR_AWS_ACCOUNT.dkr.ecr.us-east-1.amazonaws.com/quiz-app:latest `
   --capabilities CAPABILITY_IAM
 
@@ -47,41 +43,16 @@ aws cloudformation create-stack `
 aws cloudformation describe-stacks --stack-name xquizite --query 'Stacks[0].StackStatus'
 ```
 
-### 3. Upload Frontend Files
+### 3. Test the Deployment
 
 ```powershell
-# Get S3 bucket name from stack outputs (PowerShell)
-$BUCKET_NAME = aws cloudformation describe-stacks `
-  --stack-name xquizite `
-  --query 'Stacks[0].Outputs[?OutputKey==`WebsiteBucketName`].OutputValue' `
-  --output text
-
-# Upload files (PowerShell)
-aws s3 sync ./public "s3://$BUCKET_NAME"
-```
-
-### 4. Update DNS Records
-
-The CloudFormation stack automatically creates the necessary DNS records in Route 53. Wait for the ACM certificate validation to complete.
-
-### 5. Test the Deployment
-
-```powershell
-# Get CloudFront URL (PowerShell)
-$CLOUDFRONT_URL = aws cloudformation describe-stacks `
-  --stack-name xquizite `
-  --query 'Stacks[0].Outputs[?OutputKey==`CloudFrontDomain`].OutputValue' `
-  --output text
-
-Write-Host "Frontend URL: https://$CLOUDFRONT_URL"
-
 # Get Load Balancer URL (PowerShell)
 $ALB_URL = aws cloudformation describe-stacks `
   --stack-name xquizite `
   --query 'Stacks[0].Outputs[?OutputKey==`LoadBalancerDNS`].OutputValue' `
   --output text
 
-Write-Host "Backend URL: https://$ALB_URL"
+Write-Host "Application URL: http://$ALB_URL:5001"
 ```
 
 ## Stack Resources
@@ -93,19 +64,14 @@ The CloudFormation template creates:
    - Internet Gateway
    - Security Groups
 
-2. **Frontend**
-   - S3 Bucket for static files
-   - CloudFront Distribution
-   - SSL Certificate
-
-3. **Backend**
+2. **Backend**
    - ECS Fargate Cluster
    - Application Load Balancer
    - Auto Scaling configuration
 
-4. **Database & Cache**
+3. **Database & Cache**
+   - DynamoDB Tables
    - ElastiCache Redis Cluster
-   - (MongoDB Atlas is external)
 
 ## Scaling Configuration
 
@@ -135,6 +101,16 @@ aws cloudwatch get-metric-statistics `
   --end-time $EndTime `
   --period 300 `
   --statistics Average
+
+# Monitor DynamoDB metrics
+aws cloudwatch get-metric-statistics `
+  --namespace AWS/DynamoDB `
+  --metric-name ConsumedReadCapacityUnits `
+  --dimensions Name=TableName,Value=Participants `
+  --start-time $StartTime `
+  --end-time $EndTime `
+  --period 300 `
+  --statistics Sum
 ```
 
 ## Cleanup
@@ -142,9 +118,6 @@ aws cloudwatch get-metric-statistics `
 To delete all resources:
 
 ```powershell
-# Empty S3 bucket first (PowerShell)
-aws s3 rm "s3://$BUCKET_NAME" --recursive
-
 # Delete the stack
 aws cloudformation delete-stack --stack-name xquizite
 
@@ -160,22 +133,26 @@ aws cloudformation describe-stacks --stack-name xquizite --query 'Stacks[0].Stac
      aws cloudformation describe-stack-events --stack-name xquizite
      ```
    - Common issues:
-     - ACM certificate validation timeout
      - VPC limits reached
      - IAM permissions
 
 2. **Container Health Check Fails**
    - Check ECS task logs in CloudWatch
-   - Verify MongoDB connection
+   - Verify DynamoDB access
    - Check Redis connection
    - Verify environment variables
 
-3. **Frontend Not Loading**
-   - Check CloudFront distribution status
-   - Verify S3 bucket contents
-   - Check DNS propagation
+3. **Application Not Loading**
+   - Check ALB health checks
+   - Verify security group rules
+   - Check ECS service status
 
-4. **Windows-Specific Issues**
+4. **DynamoDB Issues**
+   - Check provisioned capacity
+   - Verify IAM roles and policies
+   - Monitor throttling metrics
+
+5. **Windows-Specific Issues**
    - Docker Desktop not running
      ```powershell
      # Check Docker status
@@ -211,12 +188,12 @@ aws ce get-cost-forecast `
 
 Estimated monthly costs:
 - ECS Fargate: ~$150-300
+- DynamoDB: ~$50-100
 - ElastiCache: ~$100
-- CloudFront: ~$50
 - ALB: ~$50
 - Other: ~$50
 
-Total: ~$350-500/month
+Total: ~$400-600/month
 
 ## Windows Environment Tips
 

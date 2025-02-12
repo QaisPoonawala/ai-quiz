@@ -102,21 +102,51 @@ io.on('connection', (socket) => {
             socket.join(quiz.id.toString());
             await Participant.update(participant.id, { 
                 connected: 1, 
-                socketId: socket.id 
+                socketId: socket.id,
+                lastActive: new Date().toISOString()
             });
 
             // Update participant count
             const allParticipants = await Participant.findByQuizId(quiz.id);
             const participantCount = allParticipants.filter(p => p.connected).length;
-            io.to(quiz.id.toString()).emit('participant-count', { count: participantCount });
+            const participantNames = allParticipants
+                .filter(p => p.connected)
+                .map(p => ({ name: p.name }));
 
+            io.to(quiz.id.toString()).emit('participant-count', {
+                count: participantCount,
+                participants: participantNames
+            });
+
+            // Send current quiz state
             if (quiz.currentQuestion >= 0) {
-                socket.emit('quiz-joined', {
+                const currentQuestionData = {
                     currentQuestion: quiz.currentQuestion,
                     questionStartTime: quiz.questionStartTime,
                     question: quiz.questions[quiz.currentQuestion],
                     timeLimit: quiz.questions[quiz.currentQuestion].timeLimit
+                };
+
+                // Check if participant has already answered
+                const hasAnswered = participant.answers && 
+                    participant.answers.some(a => a.questionIndex === quiz.currentQuestion);
+
+                socket.emit('quiz-joined', {
+                    ...currentQuestionData,
+                    hasAnswered
                 });
+
+                // Send current leaderboard
+                const leaderboard = allParticipants
+                    .map(p => ({
+                        name: p.name,
+                        score: p.score || 0,
+                        answeredQuestions: (p.answers || []).length,
+                        correctAnswers: (p.answers || []).filter(a => a.isCorrect === 1).length
+                    }))
+                    .sort((a, b) => b.score - a.score);
+
+                socket.emit('leaderboard-update', leaderboard);
             } else {
                 socket.emit('quiz-joined', {
                     currentQuestion: -1

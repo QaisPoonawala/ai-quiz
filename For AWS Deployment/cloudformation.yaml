@@ -357,6 +357,16 @@ Resources:
               Value: 'true'
             - Name: AWS_REGION
               Value: !Ref AWS::Region
+            - Name: PORT
+              Value: '5001'
+            - Name: CORS_ORIGIN
+              Value: !Sub 'https://${ApplicationLoadBalancer.DNSName}'
+            - Name: DYNAMODB_PARTICIPANTS_TABLE
+              Value: !Sub '${AWS::StackName}-Participants'
+            - Name: DYNAMODB_QUIZZES_TABLE
+              Value: !Sub '${AWS::StackName}-Quizzes'
+            - Name: SOCKET_PATH
+              Value: '/socket.io'
           PortMappings:
             - ContainerPort: 5001
           LogConfiguration:

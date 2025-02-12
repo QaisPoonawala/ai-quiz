@@ -4,12 +4,7 @@ require('dotenv').config();
 
 // Configure AWS credentials and region
 const config = {
-    endpoint: 'http://localhost:8000',
-    region: 'local',
-    credentials: {
-        accessKeyId: 'dummy',
-        secretAccessKey: 'dummy'
-    }
+    region: process.env.AWS_REGION
 };
 
 // Create DynamoDB client with enhanced logging

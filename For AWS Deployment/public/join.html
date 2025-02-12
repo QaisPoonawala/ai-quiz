@@ -85,16 +85,40 @@
 
     <script src="/socket.io/socket.io.js"></script>
     <script>
-        const socket = io();
-        let sessionId = null;
-        let currentQuestion = -1;
-        let hasAnswered = false;
+        // Store session info in localStorage for persistence
+        const socket = io(window.location.origin, {
+            path: '/socket.io',
+            transports: ['websocket', 'polling'],
+            reconnectionAttempts: 5,
+            reconnectionDelay: 1000,
+            timeout: 20000
+        });
+        
+        let sessionId = localStorage.getItem('quizSessionId');
+        let currentQuestion = parseInt(localStorage.getItem('currentQuestion')) || -1;
+        let hasAnswered = localStorage.getItem('hasAnswered') === 'true';
+        let participantName = localStorage.getItem('participantName');
+        let sessionCode = localStorage.getItem('sessionCode');
+
+        // Auto-fill form if we have stored session
+        if (sessionCode && participantName) {
+            document.getElementById('sessionCode').value = sessionCode;
+            document.getElementById('participantName').value = participantName;
+            // Auto-join if we have a valid session
+            if (sessionId) {
+                document.getElementById('joinForm').dispatchEvent(new Event('submit'));
+            }
+        }
 
         document.getElementById('joinForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             
             const sessionCode = document.getElementById('sessionCode').value.toUpperCase();
             const name = document.getElementById('participantName').value;
+
+            // Store values for persistence
+            localStorage.setItem('sessionCode', sessionCode);
+            localStorage.setItem('participantName', name);
 
             try {
                 const response = await fetch('/api/live/join', {
@@ -108,6 +132,7 @@
                 const data = await response.json();
                 if (data.success) {
                     sessionId = data.data.sessionId;
+                    localStorage.setItem('quizSessionId', sessionId);
                     document.getElementById('joinForm').style.display = 'none';
                     document.getElementById('quizSection').style.display = 'block';
                     socket.emit('join-quiz', { sessionId });
@@ -122,9 +147,36 @@
 
         socket.on('quiz-joined', (data) => {
             currentQuestion = data.currentQuestion;
+            hasAnswered = data.hasAnswered || false;
+            localStorage.setItem('currentQuestion', currentQuestion);
+            localStorage.setItem('hasAnswered', hasAnswered);
+            
             if (currentQuestion >= 0) {
                 showQuestion(data);
+                if (hasAnswered) {
+                    document.querySelectorAll('#options button').forEach(btn => btn.disabled = true);
+                }
             }
+        });
+
+        // Handle connection errors
+        socket.on('connect_error', (error) => {
+            console.error('Connection error:', error);
+            document.getElementById('waitingMessage').textContent = 'Connection error. Attempting to reconnect...';
+            document.getElementById('waitingMessage').style.display = 'block';
+        });
+
+        socket.on('reconnect', (attemptNumber) => {
+            console.log('Reconnected after', attemptNumber, 'attempts');
+            if (sessionId) {
+                socket.emit('join-quiz', { sessionId });
+            }
+        });
+
+        socket.on('reconnect_failed', () => {
+            console.error('Failed to reconnect');
+            document.getElementById('waitingMessage').textContent = 'Connection lost. Please refresh the page.';
+            document.getElementById('waitingMessage').style.display = 'block';
         });
 
         socket.on('quiz-reconnected', (data) => {
@@ -135,7 +187,11 @@
         });
 
         socket.on('new-question', (data) => {
+            currentQuestion = data.currentQuestion;
             hasAnswered = false;
+            localStorage.setItem('currentQuestion', currentQuestion);
+            localStorage.setItem('hasAnswered', 'false');
+            document.getElementById('waitingMessage').style.display = 'none';
             showQuestion(data);
         });
 
@@ -166,6 +222,9 @@
         });
 
         function showQuestion(data) {
+            // Store question state
+            localStorage.setItem('currentQuestion', data.currentQuestion);
+            localStorage.setItem('hasAnswered', 'false');
             const waitingMessage = document.getElementById('waitingMessage');
             const questionContainer = document.getElementById('questionContainer');
             const questionText = document.getElementById('questionText');
@@ -204,6 +263,9 @@
         async function submitAnswer(optionIndex) {
             if (hasAnswered) return;
             
+            // Store answer state
+            localStorage.setItem('hasAnswered', 'true');
+            
             try {
                 const response = await fetch('/api/live/submit', {
                     method: 'POST',
@@ -229,12 +291,27 @@
         // Handle disconnections
         socket.on('disconnect', () => {
             console.log('Disconnected from server');
+            document.getElementById('waitingMessage').textContent = 'Connection lost. Attempting to reconnect...';
+            document.getElementById('waitingMessage').style.display = 'block';
         });
 
         socket.on('connect', () => {
+            console.log('Connected to server');
             if (sessionId) {
-                socket.emit('reconnect-quiz', { sessionId });
+                socket.emit('join-quiz', { sessionId });
+                document.getElementById('waitingMessage').style.display = 'none';
+                document.getElementById('questionContainer').style.display = currentQuestion >= 0 ? 'block' : 'none';
             }
+        });
+
+        // Clear session when quiz ends
+        socket.on('quiz-ended', () => {
+            localStorage.removeItem('quizSessionId');
+            localStorage.removeItem('currentQuestion');
+            localStorage.removeItem('hasAnswered');
+            sessionId = null;
+            currentQuestion = -1;
+            hasAnswered = false;
         });
     </script>
 </body>

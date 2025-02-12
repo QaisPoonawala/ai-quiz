@@ -115,7 +115,28 @@ function showQuizForm() {
 }
 
 // Socket connection
-const socket = io();
+const socket = io(window.location.origin, {
+    path: '/socket.io',
+    transports: ['websocket', 'polling'],
+    reconnectionAttempts: 5,
+    reconnectionDelay: 1000,
+    timeout: 20000
+});
+
+// Connection error handling
+socket.on('connect_error', (error) => {
+    console.error('Socket connection error:', error);
+    alert('Connection error. Please refresh the page.');
+});
+
+socket.on('reconnect', (attemptNumber) => {
+    console.log('Reconnected after', attemptNumber, 'attempts');
+});
+
+socket.on('reconnect_failed', () => {
+    console.error('Failed to reconnect');
+    alert('Connection lost. Please refresh the page.');
+});
 
 socket.on('participant-count', (data) => {
     const participantCount = document.getElementById('participantNumber');
