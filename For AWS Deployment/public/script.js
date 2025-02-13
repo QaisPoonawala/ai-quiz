@@ -149,6 +149,36 @@ socket.on('participant-count', (data) => {
     }
 });
 
+// Timer variables
+let timerInterval;
+
+socket.on('new-question', (data) => {
+    const currentQuestionDetails = document.getElementById('currentQuestionDetails');
+    const currentQuestionText = document.getElementById('currentQuestionText');
+    const timeRemaining = document.getElementById('timeRemaining');
+    
+    if (currentQuestionDetails && currentQuestionText && timeRemaining) {
+        currentQuestionDetails.style.display = 'block';
+        currentQuestionText.textContent = data.question.questionText;
+        
+        // Clear existing timer
+        if (timerInterval) clearInterval(timerInterval);
+        
+        // Set up new timer
+        let remainingTime = data.timeLimit;
+        timeRemaining.textContent = remainingTime;
+        
+        timerInterval = setInterval(() => {
+            remainingTime--;
+            timeRemaining.textContent = remainingTime;
+            
+            if (remainingTime <= 0) {
+                clearInterval(timerInterval);
+            }
+        }, 1000);
+    }
+});
+
 socket.on('leaderboard-update', (leaderboardData) => {
     const leaderboardList = document.getElementById('liveLeaderboardList');
     if (leaderboardList) {
@@ -187,6 +217,7 @@ function filterAndDisplayQuizzes() {
     container.innerHTML = '';
     
     filteredQuizzes.forEach(quiz => {
+        const hasResults = quiz.archivedResults && quiz.archivedResults.length > 0;
         const quizCard = `
             <div class="quiz-card">
                 <div class="quiz-header">
@@ -197,11 +228,13 @@ function filterAndDisplayQuizzes() {
                         <button onclick="editQuiz('${quiz.id}')">Edit</button>
                         <button onclick="copyQuiz('${quiz.id}')">Copy</button>
                         <button onclick="deleteQuiz('${quiz.id}')">Delete</button>
+                        ${hasResults ? `<button onclick="downloadReport('${quiz.id}')" class="download-report-btn">Download Results</button>` : ''}
                     </div>
                 </div>
                 <p>${quiz.description}</p>
                 <div class="quiz-meta">
                     <span>${quiz.questions.length} Questions</span>
+                    ${hasResults ? `<span>${quiz.archivedResults.length} Participants</span>` : ''}
                 </div>
             </div>
         `;
@@ -453,16 +486,41 @@ async function downloadReport() {
 
         console.log('Downloading report for quiz:', quizId);
         const response = await fetch(`/api/quiz/${quizId}/export`);
-        const data = await response.json();
-        if (data.success) {
-            window.open(data.data.downloadUrl, '_blank');
-        } else {
-            console.error('Download report failed:', data);
-            alert(`Error downloading report: ${data.error || 'Unknown error'}`);
+        
+        // Check if the response is ok
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.message || 'Failed to download report');
         }
+
+        // Get the filename from the Content-Disposition header
+        const contentDisposition = response.headers.get('Content-Disposition');
+        const filename = contentDisposition
+            ? contentDisposition.split('filename=')[1].replace(/"/g, '')
+            : `quiz-results-${quizId}.xlsx`;
+
+        // Create a blob from the response
+        const blob = await response.blob();
+        
+        // Create a temporary link to trigger the download
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+        a.download = filename;
+        
+        // Trigger the download
+        document.body.appendChild(a);
+        a.click();
+        
+        // Cleanup
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+        
+        console.log('Report downloaded successfully');
     } catch (error) {
         console.error('Error downloading report:', error);
-        alert('Error downloading report. Please check the console for details.');
+        alert(`Error downloading report: ${error.message}`);
     }
 }
 
@@ -472,6 +530,112 @@ function applyTheme(theme) {
     root.style.setProperty('--background-color', theme.backgroundColor || '#ffffff');
     root.style.setProperty('--text-color', theme.textColor || '#333333');
     root.style.setProperty('--accent-color', theme.accentColor || '#007bff');
+}
+
+// Function to view quiz details
+async function viewQuiz(id) {
+    try {
+        const quiz = allQuizzes.find(q => q.id === id);
+        if (!quiz) {
+            alert('Quiz not found');
+            return;
+        }
+
+        // Show quiz form in view mode
+        document.getElementById('quizList').style.display = 'none';
+        document.getElementById('quizForm').style.display = 'block';
+        document.getElementById('liveQuizControl').style.display = 'none';
+
+        // Add cancel button if it doesn't exist
+        let cancelButton = document.getElementById('cancelButton');
+        if (!cancelButton) {
+            const submitButton = document.querySelector('#createQuizForm button[type="submit"]');
+            cancelButton = document.createElement('button');
+            cancelButton.id = 'cancelButton';
+            cancelButton.type = 'button';
+            cancelButton.className = 'cancel-button';
+            cancelButton.textContent = 'Cancel';
+            cancelButton.onclick = () => {
+                document.getElementById('createQuizForm').reset();
+                document.getElementById('questionsContainer').innerHTML = '';
+                showQuizzes();
+            };
+            submitButton.parentNode.insertBefore(cancelButton, submitButton);
+        }
+
+        // Fill form with quiz data
+        document.getElementById('quizTitle').value = quiz.title;
+        document.getElementById('quizDescription').value = quiz.description;
+        document.getElementById('backgroundColor').value = quiz.theme?.backgroundColor || '#ffffff';
+        document.getElementById('textColor').value = quiz.theme?.textColor || '#333333';
+        document.getElementById('accentColor').value = quiz.theme?.accentColor || '#007bff';
+
+        // Make all form fields readonly
+        document.querySelectorAll('#createQuizForm input, #createQuizForm textarea').forEach(input => {
+            input.readOnly = true;
+        });
+
+        // Hide submit button
+        document.querySelector('#createQuizForm button[type="submit"]').style.display = 'none';
+
+        // Add questions in readonly mode
+        quiz.questions.forEach(question => {
+            const questionsContainer = document.getElementById('questionsContainer');
+            const questionNumber = questionsContainer.children.length + 1;
+
+            const questionHTML = `
+                <div class="question-container">
+                    <h3>Question ${questionNumber}</h3>
+                    <div class="form-group">
+                        <label>Question Text:</label>
+                        <input type="text" class="question-text" value="${question.questionText}" readonly>
+                    </div>
+                    <div class="form-group">
+                        <label>Time Limit (seconds):</label>
+                        <input type="number" class="time-limit" value="${question.timeLimit}" readonly>
+                    </div>
+                    <div class="form-group">
+                        <label>Image:</label>
+                        <div class="image-preview">
+                            ${question.imageUrl ? `<img src="${question.imageUrl}" alt="Question image">` : 'No image'}
+                        </div>
+                    </div>
+                    <div class="options-container">
+                        <h4>Options</h4>
+                        ${question.options.map((option, index) => `
+                            <div class="option">
+                                <input type="text" value="${option.text}" readonly>
+                                <label>
+                                    <input type="checkbox" class="correct-option" ${option.isCorrect ? 'checked' : ''} disabled>
+                                    Correct
+                                </label>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+            questionsContainer.insertAdjacentHTML('beforeend', questionHTML);
+        });
+
+        // Hide add/remove buttons in view mode
+        document.querySelectorAll('.remove-question, button[onclick^="addOption"], button[onclick^="removeOption"]').forEach(button => {
+            button.style.display = 'none';
+        });
+
+        // Add download report button if quiz has archived results
+        if (quiz.archivedResults && quiz.archivedResults.length > 0) {
+            const actionButtons = document.createElement('div');
+            actionButtons.className = 'quiz-view-actions';
+            actionButtons.innerHTML = `
+                <button onclick="downloadReport('${quiz.id}')" class="download-report-btn">Download Results</button>
+            `;
+            document.getElementById('quizForm').insertBefore(actionButtons, document.getElementById('questionsContainer'));
+        }
+
+    } catch (error) {
+        console.error('Error viewing quiz:', error);
+        alert('Error viewing quiz. Please check the console for details.');
+    }
 }
 
 async function editQuiz(id) {
@@ -486,6 +650,22 @@ async function editQuiz(id) {
         document.getElementById('quizList').style.display = 'none';
         document.getElementById('quizForm').style.display = 'block';
         document.getElementById('liveQuizControl').style.display = 'none';
+
+        // Add save and cancel buttons if they don't exist
+        let actionButtons = document.querySelector('.form-action-buttons');
+        if (!actionButtons) {
+            actionButtons = document.createElement('div');
+            actionButtons.className = 'form-action-buttons';
+            const submitButton = document.querySelector('#createQuizForm button[type="submit"]');
+            submitButton.parentNode.insertBefore(actionButtons, submitButton);
+        }
+        actionButtons.innerHTML = `
+            <button type="button" class="save-button" onclick="updateQuiz('${id}')">Save Changes</button>
+            <button type="button" class="cancel-button" onclick="cancelEdit()">Cancel</button>
+        `;
+
+        // Hide the default submit button
+        document.querySelector('#createQuizForm button[type="submit"]').style.display = 'none';
 
         // Fill form with quiz data
         document.getElementById('quizTitle').value = quiz.title;
@@ -536,12 +716,6 @@ async function editQuiz(id) {
             questionsContainer.insertAdjacentHTML('beforeend', questionHTML);
         });
 
-        // Update form submission to handle edit
-        const form = document.getElementById('createQuizForm');
-        form.onsubmit = async (e) => {
-            e.preventDefault();
-            await updateQuiz(id);
-        };
     } catch (error) {
         console.error('Error editing quiz:', error);
         alert('Error editing quiz. Please check the console for details.');
@@ -654,7 +828,9 @@ async function copyQuiz(id) {
         
         if (data.success) {
             alert('Quiz copied successfully!');
-            loadQuizzes(); // Refresh quiz list
+            // Instead of just refreshing the list, edit the copied quiz
+            const copiedQuiz = data.data;
+            editQuiz(copiedQuiz.id);
         } else {
             console.error('Copy quiz failed:', data);
             alert(`Error copying quiz: ${data.error || 'Unknown error'}`);
@@ -662,6 +838,22 @@ async function copyQuiz(id) {
     } catch (error) {
         console.error('Error copying quiz:', error);
         alert('Error copying quiz. Please check the console for details.');
+    }
+}
+
+// Function to cancel editing
+function cancelEdit() {
+    if (confirm('Are you sure you want to cancel? Any unsaved changes will be lost.')) {
+        document.getElementById('createQuizForm').reset();
+        document.getElementById('questionsContainer').innerHTML = '';
+        // Remove action buttons
+        const actionButtons = document.querySelector('.form-action-buttons');
+        if (actionButtons) {
+            actionButtons.remove();
+        }
+        // Show the default submit button
+        document.querySelector('#createQuizForm button[type="submit"]').style.display = 'block';
+        showQuizzes();
     }
 }
 

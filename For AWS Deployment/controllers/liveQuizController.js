@@ -341,48 +341,94 @@ exports.generateReport = async (req, res) => {
             return res.status(404).json({ success: false, error: 'Quiz not found' });
         }
 
+        if (!quiz.questions || !Array.isArray(quiz.questions)) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'Invalid quiz format',
+                details: 'Quiz questions not found or invalid format'
+            });
+        }
+
+        // Validate question format
+        if (!quiz.questions.every(q => q && typeof q.questionText === 'string')) {
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid question format',
+                details: 'One or more questions are missing text or have invalid format'
+            });
+        }
+
         // Get all participants for this quiz
-        const participants = await Participant.find({
-            FilterExpression: 'quizId = :quizId',
-            ExpressionAttributeValues: {
-                ':quizId': quiz.id
-            }
-        });
+        const participants = await Participant.findByQuizId(quiz.id);
 
-        const reportData = participants.map(p => ({
-            'Participant Name': p.name,
-            'Total Score': p.score,
-            'Questions Attempted': p.answers.length,
-            'Correct Answers': p.answers.filter(a => a.isCorrect === 1).length,
-            'Average Time per Question': p.answers.reduce((acc, curr) => acc + curr.timeTaken, 0) / p.answers.length
-        }));
+        // Process data in chunks to handle large datasets
+        const chunkSize = 100;
+        const reportData = [];
+        for (let i = 0; i < participants.length; i += chunkSize) {
+            const chunk = participants.slice(i, i + chunkSize);
+            const chunkData = chunk.map(p => ({
+                'Participant Name': p.name,
+                'Total Score': p.score || 0,
+                'Questions Attempted': (p.answers || []).length,
+                'Correct Answers': (p.answers || []).filter(a => a.isCorrect === 1).length,
+                'Average Time per Question': p.answers && p.answers.length > 0 
+                    ? p.answers.reduce((acc, curr) => acc + (curr.timeTaken || 0), 0) / p.answers.length 
+                    : 0
+            }));
+            reportData.push(...chunkData);
+        }
 
-        const questionStats = quiz.questions.map((q, idx) => {
-            const attempts = quiz.participants.filter(p => 
-                p.answers.some(a => a.questionIndex === idx)
-            ).length;
-            const correct = quiz.participants.filter(p =>
-                p.answers.some(a => a.questionIndex === idx && a.isCorrect === 1)
-            ).length;
+        // Process question stats in chunks
+        const questionStats = [];
+        for (let i = 0; i < quiz.questions.length; i += chunkSize) {
+            const questionChunk = quiz.questions.slice(i, i + chunkSize);
+            const statsChunk = questionChunk.map((q, chunkIdx) => {
+                const idx = i + chunkIdx;
+                // Process participant answers in chunks
+                let attempts = 0;
+                let correct = 0;
+                for (let j = 0; j < participants.length; j += chunkSize) {
+                    const participantChunk = participants.slice(j, j + chunkSize);
+                    const answers = participantChunk.map(p => p.answers || []).flat()
+                        .filter(a => a.questionIndex === idx);
+                    attempts += answers.length;
+                    correct += answers.filter(a => a.isCorrect === 1).length;
+                }
 
-            return {
-                'Question': q.questionText,
-                'Total Attempts': attempts,
-                'Correct Answers': correct,
-                'Success Rate': `${Math.round((correct/attempts) * 100)}%`
-            };
-        });
+                return {
+                    'Question': q.questionText,
+                    'Total Attempts': attempts,
+                    'Correct Answers': correct,
+                    'Success Rate': attempts > 0 ? `${Math.round((correct/attempts) * 100)}%` : '0%'
+                };
+            });
+            questionStats.push(...statsChunk);
+        }
 
         const wb = xlsx.utils.book_new();
         xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet(reportData), 'Participants');
         xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet(questionStats), 'Questions');
 
-        const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
-        
-        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-        res.setHeader('Content-Disposition', `attachment; filename=quiz-report-${quiz._id}.xlsx`);
-        res.send(buffer);
+        try {
+            const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+            
+            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+            res.setHeader('Content-Disposition', `attachment; filename=quiz-report-${quiz.id}.xlsx`);
+            res.send(buffer);
+        } catch (xlsxError) {
+            console.error('Error generating Excel file:', xlsxError);
+            res.status(500).json({ 
+                success: false, 
+                error: 'Error generating report file',
+                details: xlsxError.message 
+            });
+        }
     } catch (error) {
-        res.status(400).json({ success: false, error: error.message });
+        console.error('Error in generateReport:', error);
+        res.status(400).json({ 
+            success: false, 
+            error: 'Failed to generate report',
+            details: error.message 
+        });
     }
 };
