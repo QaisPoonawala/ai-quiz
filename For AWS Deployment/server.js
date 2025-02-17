@@ -14,38 +14,145 @@ dotenv.config();
 const app = express();
 const httpServer = createServer(app);
 
-// Redis setup for Socket.IO scaling
-const pubClient = new Redis(process.env.REDIS_URL, {
-    retryStrategy: (times) => {
-        // Stop retrying after 5 attempts
-        if (times > 5) {
-            console.error('Redis connection failed after multiple attempts');
-            return null;
-        }
-        // Exponential backoff
-        return Math.min(times * 50, 2000);
-    },
-    maxRetriesPerRequest: 3
-});
+// Socket.IO setup with optional Redis adapter
+let io;
+if (process.env.REDIS_URL) {
+    // Redis setup for Socket.IO scaling in production
+    const redisOptions = {
+        retryStrategy: (times) => {
+            const delay = Math.min(times * 500, 5000);
+            console.log(`Redis connection attempt ${times}, retrying in ${delay}ms`);
+            return delay;
+        },
+        maxRetriesPerRequest: 5,
+        enableReadyCheck: true,
+        reconnectOnError: (err) => {
+            console.error('Redis reconnect on error:', err);
+            const targetError = 'READONLY';
+            if (err.message.includes(targetError)) {
+                // Only reconnect if it's a READONLY error
+                return true;
+            }
+            return false;
+        },
+        // TLS options for AWS ElastiCache
+        tls: process.env.REDIS_TLS_ENABLED === 'true' ? {
+            rejectUnauthorized: false // Required for self-signed certs
+        } : undefined,
+        retryUnfulfilledCommands: true,
+        maxReconnectAttempts: 10,
+        connectTimeout: 20000,
+        disconnectTimeout: 20000
+    };
 
-const subClient = pubClient.duplicate();
+    const pubClient = new Redis(process.env.REDIS_URL, redisOptions);
 
-// Add error handlers
-pubClient.on('error', (err) => {
-    console.error('Redis Pub Client Error:', err);
-});
+    const subClient = pubClient.duplicate();
 
-subClient.on('error', (err) => {
-    console.error('Redis Sub Client Error:', err);
-});
+    // Monitor Redis connection state
+    const monitorRedisConnection = (client, name) => {
+        client.on('connect', () => {
+            console.log(`Redis ${name} client connected`);
+        });
 
-const io = new Server(httpServer, {
-    cors: {
-        origin: '*',
-        methods: ['GET', 'POST']
-    },
-    adapter: createAdapter(pubClient, subClient)
-});
+        client.on('ready', () => {
+            console.log(`Redis ${name} client ready`);
+        });
+
+        client.on('error', (err) => {
+            console.error(`Redis ${name} client error:`, err);
+        });
+
+        client.on('close', () => {
+            console.log(`Redis ${name} client closed`);
+        });
+
+        client.on('reconnecting', (delay) => {
+            console.log(`Redis ${name} client reconnecting in ${delay}ms`);
+        });
+
+        client.on('end', () => {
+            console.log(`Redis ${name} client ended`);
+        });
+    };
+
+    monitorRedisConnection(pubClient, 'pub');
+    monitorRedisConnection(subClient, 'sub');
+
+    // Enhanced error handlers and connection monitoring
+    pubClient.on('error', (err) => {
+        console.error('Redis Pub Client Error:', err);
+    });
+
+    pubClient.on('connect', () => {
+        console.log('Redis Pub Client Connected');
+    });
+
+    pubClient.on('ready', () => {
+        console.log('Redis Pub Client Ready');
+    });
+
+    subClient.on('error', (err) => {
+        console.error('Redis Sub Client Error:', err);
+    });
+
+    subClient.on('connect', () => {
+        console.log('Redis Sub Client Connected');
+    });
+
+    subClient.on('ready', () => {
+        console.log('Redis Sub Client Ready');
+    });
+
+    // Store Redis client in app for use in routes
+    app.set('redisClient', pubClient);
+
+    io = new Server(httpServer, {
+        cors: {
+            origin: '*',
+            methods: ['GET', 'POST']
+        },
+        adapter: createAdapter(pubClient, subClient),
+        connectTimeout: 45000,
+        pingTimeout: 30000,
+        pingInterval: 25000,
+        transports: ['websocket', 'polling'],
+        allowUpgrades: true,
+        upgradeTimeout: 10000,
+        maxHttpBufferSize: 1e8
+    });
+
+    // Monitor socket connections
+    io.engine.on('connection_error', (err) => {
+        console.error('Socket.IO connection error:', err);
+    });
+    console.log('Socket.IO initialized with Redis adapter for AWS');
+
+    // Monitor Redis adapter events
+    io.of('/').adapter.on('error', (error) => {
+        console.error('Redis adapter error:', error);
+    });
+
+    io.of('/').adapter.on('join-room', (room, id) => {
+        console.log(`Socket ${id} joined room ${room}`);
+    });
+
+    io.of('/').adapter.on('leave-room', (room, id) => {
+        console.log(`Socket ${id} left room ${room}`);
+    });
+} else {
+    // Basic Socket.IO setup for local development
+    io = new Server(httpServer, {
+        cors: {
+            origin: '*',
+            methods: ['GET', 'POST']
+        },
+        connectTimeout: 45000, // Consistent timeout even in development
+        pingTimeout: 30000,
+        pingInterval: 25000
+    });
+    console.log('Socket.IO initialized without Redis (local development mode)');
+}
 
 // Health check endpoint for AWS
 app.get('/health', (req, res) => {
@@ -73,12 +180,24 @@ io.on('connection', (socket) => {
 
     socket.on('host-quiz', async ({ quizId }) => {
         try {
-            socket.join(quizId.toString());
+            const roomId = quizId.toString();
+            socket.join(roomId);
+            console.log(`Host joined room ${roomId}`);
+            
             // Get current participant count
             const quiz = await Quiz.findById(quizId);
             const participants = await Participant.findByQuizId(quizId);
             const participantCount = participants.filter(p => p.connected).length;
-            io.to(quizId.toString()).emit('participant-count', { count: participantCount });
+            
+            console.log(`Broadcasting participant count to room ${roomId}:`, {
+                count: participantCount,
+                participants: participants.filter(p => p.connected).map(p => p.name)
+            });
+            
+            io.in(roomId).emit('participant-count', { 
+                count: participantCount,
+                participants: participants.filter(p => p.connected).map(p => ({ name: p.name }))
+            });
         } catch (error) {
             socket.emit('error', error.message);
         }
@@ -99,54 +218,50 @@ io.on('connection', (socket) => {
                 return;
             }
 
-            socket.join(quiz.id.toString());
+            const roomId = quiz.id.toString();
+            socket.join(roomId);
+            console.log(`Client ${socket.id} joined room ${roomId}`);
+            
             await Participant.update(participant.id, { 
                 connected: 1, 
-                socketId: socket.id,
-                lastActive: new Date().toISOString()
+                socketId: socket.id 
             });
+
+            // If there's an active question, send it immediately
+            if (quiz.currentQuestion >= 0) {
+                const currentQuestion = quiz.questions[quiz.currentQuestion];
+                console.log(`Sending current question to new participant in room ${roomId}:`, {
+                    questionIndex: quiz.currentQuestion,
+                    questionText: currentQuestion.questionText
+                });
+                socket.emit('new-question', {
+                    question: {
+                        questionText: currentQuestion.questionText,
+                        options: currentQuestion.options.map(opt => ({
+                            text: opt.text,
+                            isCorrect: opt.isCorrect
+                        }))
+                    },
+                    timeLimit: currentQuestion.timeLimit,
+                    questionStartTime: quiz.questionStartTime
+                });
+            }
 
             // Update participant count
             const allParticipants = await Participant.findByQuizId(quiz.id);
             const participantCount = allParticipants.filter(p => p.connected).length;
-            const participantNames = allParticipants
-                .filter(p => p.connected)
-                .map(p => ({ name: p.name }));
-
-            io.to(quiz.id.toString()).emit('participant-count', {
+            io.in(roomId).emit('participant-count', { 
                 count: participantCount,
-                participants: participantNames
+                participants: allParticipants.filter(p => p.connected).map(p => ({ name: p.name }))
             });
 
-            // Send current quiz state
             if (quiz.currentQuestion >= 0) {
-                const currentQuestionData = {
+                socket.emit('quiz-joined', {
                     currentQuestion: quiz.currentQuestion,
                     questionStartTime: quiz.questionStartTime,
                     question: quiz.questions[quiz.currentQuestion],
                     timeLimit: quiz.questions[quiz.currentQuestion].timeLimit
-                };
-
-                // Check if participant has already answered
-                const hasAnswered = participant.answers && 
-                    participant.answers.some(a => a.questionIndex === quiz.currentQuestion);
-
-                socket.emit('quiz-joined', {
-                    ...currentQuestionData,
-                    hasAnswered
                 });
-
-                // Send current leaderboard
-                const leaderboard = allParticipants
-                    .map(p => ({
-                        name: p.name,
-                        score: p.score || 0,
-                        answeredQuestions: (p.answers || []).length,
-                        correctAnswers: (p.answers || []).filter(a => a.isCorrect === 1).length
-                    }))
-                    .sort((a, b) => b.score - a.score);
-
-                socket.emit('leaderboard-update', leaderboard);
             } else {
                 socket.emit('quiz-joined', {
                     currentQuestion: -1
@@ -240,7 +355,8 @@ io.on('connection', (socket) => {
                 .sort((a, b) => b.score - a.score);
 
             // Emit both leaderboard update and answer result
-            io.to(quiz.id.toString()).emit('leaderboard-update', leaderboard);
+            const roomId = quiz.id.toString();
+            io.in(roomId).emit('leaderboard-update', leaderboard);
             socket.emit('answer-result', {
                 isCorrect: isCorrect ? 1 : 0,
                 points,
@@ -276,7 +392,11 @@ io.on('connection', (socket) => {
                 // Update participant count
                 const allParticipants = await Participant.findByQuizId(participant.quizId);
                 const participantCount = allParticipants.filter(p => p.connected).length;
-                io.to(participant.quizId.toString()).emit('participant-count', { count: participantCount });
+                const roomId = participant.quizId.toString();
+                io.in(roomId).emit('participant-count', { 
+                    count: participantCount,
+                    participants: allParticipants.filter(p => p.connected).map(p => ({ name: p.name }))
+                });
             }
         } catch (error) {
             console.error('Disconnect error:', error);

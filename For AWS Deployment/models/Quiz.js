@@ -3,18 +3,7 @@ const { docClient } = require('../config/db');
 const { v4: uuidv4 } = require('uuid');
 
 class Quiz {
-    static tableName = process.env.DYNAMODB_QUIZZES_TABLE;
-    static RETENTION_DAYS = 90; // Number of days to keep archived results
-
-    static cleanupOldResults(results) {
-        const cutoffDate = new Date();
-        cutoffDate.setDate(cutoffDate.getDate() - this.RETENTION_DAYS);
-        
-        return results.filter(result => {
-            const completedAt = new Date(result.completedAt);
-            return completedAt > cutoffDate;
-        });
-    }
+    static tableName = process.env.DYNAMODB_QUIZZES_TABLE || 'Quizzes';
 
     static async create(quizData) {
         // Validate input
@@ -71,23 +60,6 @@ class Quiz {
                 TableName: this.tableName,
                 Key: { id }
             }));
-
-            if (response.Item && response.Item.archivedResults) {
-                // Clean up old results
-                const cleanedResults = this.cleanupOldResults(response.Item.archivedResults);
-                
-                // If results were cleaned, update the database
-                if (cleanedResults.length !== response.Item.archivedResults.length) {
-                    console.log(`Cleaning up ${response.Item.archivedResults.length - cleanedResults.length} old results for quiz ${id}`);
-                    
-                    await this.findByIdAndUpdate(id, {
-                        archivedResults: cleanedResults
-                    });
-                    
-                    response.Item.archivedResults = cleanedResults;
-                }
-            }
-
             return response.Item;
         } catch (error) {
             console.error('Error finding quiz by ID:', error);
@@ -112,27 +84,7 @@ class Quiz {
             // Use scan operation
             const command = new ScanCommand(params);
             const response = await docClient.send(command);
-
-            // Clean up old results for each quiz
-            const cleanedItems = await Promise.all(response.Items.map(async (quiz) => {
-                if (quiz.archivedResults && quiz.archivedResults.length > 0) {
-                    const cleanedResults = this.cleanupOldResults(quiz.archivedResults);
-                    
-                    // If results were cleaned, update the database
-                    if (cleanedResults.length !== quiz.archivedResults.length) {
-                        console.log(`Cleaning up ${quiz.archivedResults.length - cleanedResults.length} old results for quiz ${quiz.id}`);
-                        
-                        await this.findByIdAndUpdate(quiz.id, {
-                            archivedResults: cleanedResults
-                        });
-                        
-                        quiz.archivedResults = cleanedResults;
-                    }
-                }
-                return quiz;
-            }));
-
-            return cleanedItems;
+            return response.Items;
         } catch (error) {
             console.error('Error finding quizzes:', error);
             throw error;
@@ -224,18 +176,13 @@ class Quiz {
             }
             console.log('Found quiz:', JSON.stringify(quiz, null, 2));
 
-            // Merge and clean up results
+            // Merge existing archived results with new results
             const existingResults = quiz.archivedResults || [];
-            const mergedResults = [...existingResults, ...results];
-            const cleanedResults = this.cleanupOldResults(mergedResults);
-            console.log('Merged and cleaned results:', JSON.stringify(cleanedResults, null, 2));
-            
-            if (mergedResults.length !== cleanedResults.length) {
-                console.log(`Cleaned up ${mergedResults.length - cleanedResults.length} old results during merge`);
-            }
+            const updatedResults = [...existingResults, ...results];
+            console.log('Merged results:', JSON.stringify(updatedResults, null, 2));
 
             // Ensure all required fields are present and in correct format
-            const sanitizedResults = cleanedResults.map(result => ({
+            const sanitizedResults = updatedResults.map(result => ({
                 participantName: result.participantName || '',
                 score: Number(result.score) || 0,
                 completedAt: result.completedAt || new Date().toISOString(),

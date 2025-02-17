@@ -27,6 +27,19 @@ exports.startLiveQuiz = async (req, res) => {
             participants: []
         });
 
+        // Publish participant update to Redis
+        const io = req.app.get('io');
+        const roomId = quiz.id.toString();
+        // Only publish to Redis if available
+        const redisClient = req.app.get('redisClient');
+        if (redisClient) {
+            await redisClient.publish('participant-update', JSON.stringify({
+                roomId,
+                count: 0,
+                participants: []
+            }));
+        }
+
         res.status(200).json({
             success: true,
             data: {
@@ -47,10 +60,14 @@ exports.joinQuiz = async (req, res) => {
         // Use scan to find quiz by sessionCode
         const response = await docClient.send(new ScanCommand({
             TableName: Quiz.tableName,
-            FilterExpression: 'sessionCode = :sessionCode and isLive = :isLive',
+            FilterExpression: '#sc = :sessionCode AND #il = :isLive',
             ExpressionAttributeValues: {
                 ':sessionCode': sessionCode,
                 ':isLive': 1
+            },
+            ExpressionAttributeNames: {
+                '#sc': 'sessionCode',
+                '#il': 'isLive'
             }
         }));
         const quizzes = response.Items;
@@ -80,13 +97,25 @@ exports.joinQuiz = async (req, res) => {
             participants: [...(quiz.participants || []), participantId]
         });
 
-        // Get all participants and emit updated count and names
+        // Get all participants and publish update to Redis
         const allParticipants = await Participant.findByQuizId(quiz.id);
         const io = req.app.get('io');
-        io.to(quiz.id.toString()).emit('participant-count', {
-            count: allParticipants.length,
-            participants: allParticipants.map(p => ({ name: p.name }))
+        const roomId = quiz.id.toString();
+        const connectedParticipants = allParticipants.filter(p => p.connected === 1);
+        console.log(`Publishing participant update to Redis for room ${roomId}:`, {
+            count: connectedParticipants.length,
+            participants: connectedParticipants.map(p => p.name)
         });
+        
+        // Only publish to Redis if available
+        const redisClient = req.app.get('redisClient');
+        if (redisClient) {
+            await redisClient.publish('participant-update', JSON.stringify({
+                roomId,
+                count: connectedParticipants.length,
+                participants: connectedParticipants.map(p => ({ name: p.name }))
+            }));
+        }
 
         res.status(200).json({
             success: true,
@@ -121,7 +150,14 @@ exports.nextQuestion = async (req, res) => {
             return res.status(200).json({ success: true, finished: true });
         }
 
-        await Quiz.findByIdAndUpdate(req.params.id, {
+        // Update quiz with new question
+        const updatedQuiz = await Quiz.findByIdAndUpdate(req.params.id, {
+            currentQuestion,
+            questionStartTime
+        }, { new: true }); // Get the updated document
+
+        console.log('Moving to question:', {
+            quizId: req.params.id,
             currentQuestion,
             questionStartTime
         });
@@ -138,7 +174,15 @@ exports.nextQuestion = async (req, res) => {
             }))
             .sort((a, b) => b.score - a.score);
 
-        const nextQuestion = quiz.questions[currentQuestion];
+        const nextQuestion = updatedQuiz.questions[currentQuestion];
+        if (!nextQuestion) {
+            console.error('Question not found:', {
+                quizId: req.params.id,
+                currentQuestion,
+                totalQuestions: updatedQuiz.questions.length
+            });
+            return res.status(400).json({ success: false, error: 'Question not found' });
+        }
 
         // Emit new question and leaderboard to all participants
         const io = req.app.get('io');
@@ -146,18 +190,43 @@ exports.nextQuestion = async (req, res) => {
         // Get participant names
         const participantNames = participants.map(p => ({ name: p.name }));
         
-        io.to(quiz.id.toString()).emit('participant-count', {
-            count: participants.length,
-            participants: participantNames
+        const roomId = quiz.id.toString();
+        const connectedParticipants = participants.filter(p => p.connected === 1);
+        
+        console.log(`Broadcasting to room ${roomId}:`, {
+            participantCount: connectedParticipants.length,
+            questionIndex: currentQuestion
         });
         
-        io.to(quiz.id.toString()).emit('new-question', {
-            currentQuestion,
-            question: nextQuestion,
+        // Only publish to Redis if available
+        const redisClient = req.app.get('redisClient');
+        if (redisClient) {
+            await redisClient.publish('participant-update', JSON.stringify({
+                roomId,
+                count: connectedParticipants.length,
+                participants: connectedParticipants.map(p => ({ name: p.name }))
+            }));
+        }
+        
+        console.log('Broadcasting new question:', {
+            roomId,
+            questionIndex: currentQuestion,
+            questionText: nextQuestion.questionText,
+            timeLimit: nextQuestion.timeLimit
+        });
+
+        io.in(roomId).emit('new-question', {
+            question: {
+                questionText: nextQuestion.questionText,
+                options: nextQuestion.options.map(opt => ({
+                    text: opt.text,
+                    isCorrect: opt.isCorrect
+                }))
+            },
             timeLimit: nextQuestion.timeLimit,
             questionStartTime: questionStartTime
         });
-        io.to(quiz.id.toString()).emit('leaderboard-update', leaderboardData);
+        io.in(roomId).emit('leaderboard-update', leaderboardData);
         res.status(200).json({
             success: true,
             data: {
@@ -281,7 +350,8 @@ exports.submitAnswer = async (req, res) => {
 
         // Emit updated leaderboard to all participants
         const io = req.app.get('io');
-        io.to(quiz.id.toString()).emit('leaderboard-update', leaderboardData);
+        const roomId = quiz.id.toString();
+        io.in(roomId).emit('leaderboard-update', leaderboardData);
 
         // Get updated participant data
         const updatedParticipant = await Participant.findById(participant.id);
@@ -333,6 +403,84 @@ exports.getLeaderboard = async (req, res) => {
     }
 };
 
+// Handle participant disconnect
+exports.handleDisconnect = async (req, res) => {
+    try {
+        const { sessionId } = req.body;
+        
+        // Find participant by sessionId
+        const participants = await Participant.findBySessionId(sessionId);
+        if (!participants || participants.length === 0) {
+            return res.status(404).json({ success: false, error: 'Participant not found' });
+        }
+        const participant = participants[0];
+
+        // Update participant connection status
+        await Participant.update(participant.id, {
+            connected: 0,
+            lastActive: new Date().toISOString()
+        });
+
+        // Get all participants and publish update to Redis
+        const allParticipants = await Participant.findByQuizId(participant.quizId);
+        const connectedParticipants = allParticipants.filter(p => p.connected === 1);
+        
+        // Only publish to Redis if available
+        const redisClient = req.app.get('redisClient');
+        if (redisClient) {
+            await redisClient.publish('participant-update', JSON.stringify({
+                roomId: participant.quizId.toString(),
+                count: connectedParticipants.length,
+                participants: connectedParticipants.map(p => ({ name: p.name }))
+            }));
+        }
+
+        res.status(200).json({ success: true });
+    } catch (error) {
+        res.status(400).json({ success: false, error: error.message });
+    }
+};
+
+// Handle participant reconnect
+exports.handleReconnect = async (req, res) => {
+    try {
+        const { sessionId } = req.body;
+        
+        // Find participant by sessionId
+        const participants = await Participant.findBySessionId(sessionId);
+        if (!participants || participants.length === 0) {
+            return res.status(404).json({ success: false, error: 'Participant not found' });
+        }
+        const participant = participants[0];
+
+        // Update participant connection status
+        await Participant.update(participant.id, {
+            connected: 1,
+            lastActive: new Date().toISOString()
+        });
+
+        // Get all participants and publish update to Redis
+        const allParticipants = await Participant.findByQuizId(participant.quizId);
+        const connectedParticipants = allParticipants.filter(p => p.connected === 1);
+        
+        const redisClient = req.app.get('redisClient');
+        await redisClient.publish('participant-update', JSON.stringify({
+            roomId: participant.quizId.toString(),
+            count: connectedParticipants.length,
+            participants: connectedParticipants.map(p => ({ name: p.name }))
+        }));
+
+        res.status(200).json({ 
+            success: true,
+            data: {
+                quizId: participant.quizId
+            }
+        });
+    } catch (error) {
+        res.status(400).json({ success: false, error: error.message });
+    }
+};
+
 // Generate report
 exports.generateReport = async (req, res) => {
     try {
@@ -341,94 +489,48 @@ exports.generateReport = async (req, res) => {
             return res.status(404).json({ success: false, error: 'Quiz not found' });
         }
 
-        if (!quiz.questions || !Array.isArray(quiz.questions)) {
-            return res.status(400).json({ 
-                success: false, 
-                error: 'Invalid quiz format',
-                details: 'Quiz questions not found or invalid format'
-            });
-        }
-
-        // Validate question format
-        if (!quiz.questions.every(q => q && typeof q.questionText === 'string')) {
-            return res.status(400).json({
-                success: false,
-                error: 'Invalid question format',
-                details: 'One or more questions are missing text or have invalid format'
-            });
-        }
-
         // Get all participants for this quiz
-        const participants = await Participant.findByQuizId(quiz.id);
+        const participants = await Participant.find({
+            FilterExpression: 'quizId = :quizId',
+            ExpressionAttributeValues: {
+                ':quizId': quiz.id
+            }
+        });
 
-        // Process data in chunks to handle large datasets
-        const chunkSize = 100;
-        const reportData = [];
-        for (let i = 0; i < participants.length; i += chunkSize) {
-            const chunk = participants.slice(i, i + chunkSize);
-            const chunkData = chunk.map(p => ({
-                'Participant Name': p.name,
-                'Total Score': p.score || 0,
-                'Questions Attempted': (p.answers || []).length,
-                'Correct Answers': (p.answers || []).filter(a => a.isCorrect === 1).length,
-                'Average Time per Question': p.answers && p.answers.length > 0 
-                    ? p.answers.reduce((acc, curr) => acc + (curr.timeTaken || 0), 0) / p.answers.length 
-                    : 0
-            }));
-            reportData.push(...chunkData);
-        }
+        const reportData = participants.map(p => ({
+            'Participant Name': p.name,
+            'Total Score': p.score,
+            'Questions Attempted': p.answers.length,
+            'Correct Answers': p.answers.filter(a => a.isCorrect === 1).length,
+            'Average Time per Question': p.answers.reduce((acc, curr) => acc + curr.timeTaken, 0) / p.answers.length
+        }));
 
-        // Process question stats in chunks
-        const questionStats = [];
-        for (let i = 0; i < quiz.questions.length; i += chunkSize) {
-            const questionChunk = quiz.questions.slice(i, i + chunkSize);
-            const statsChunk = questionChunk.map((q, chunkIdx) => {
-                const idx = i + chunkIdx;
-                // Process participant answers in chunks
-                let attempts = 0;
-                let correct = 0;
-                for (let j = 0; j < participants.length; j += chunkSize) {
-                    const participantChunk = participants.slice(j, j + chunkSize);
-                    const answers = participantChunk.map(p => p.answers || []).flat()
-                        .filter(a => a.questionIndex === idx);
-                    attempts += answers.length;
-                    correct += answers.filter(a => a.isCorrect === 1).length;
-                }
+        const questionStats = quiz.questions.map((q, idx) => {
+            const attempts = quiz.participants.filter(p => 
+                p.answers.some(a => a.questionIndex === idx)
+            ).length;
+            const correct = quiz.participants.filter(p =>
+                p.answers.some(a => a.questionIndex === idx && a.isCorrect === 1)
+            ).length;
 
-                return {
-                    'Question': q.questionText,
-                    'Total Attempts': attempts,
-                    'Correct Answers': correct,
-                    'Success Rate': attempts > 0 ? `${Math.round((correct/attempts) * 100)}%` : '0%'
-                };
-            });
-            questionStats.push(...statsChunk);
-        }
+            return {
+                'Question': q.questionText,
+                'Total Attempts': attempts,
+                'Correct Answers': correct,
+                'Success Rate': `${Math.round((correct/attempts) * 100)}%`
+            };
+        });
 
         const wb = xlsx.utils.book_new();
         xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet(reportData), 'Participants');
         xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet(questionStats), 'Questions');
 
-        try {
-            const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
-            
-            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-            res.setHeader('Content-Disposition', `attachment; filename=quiz-report-${quiz.id}.xlsx`);
-            res.send(buffer);
-        } catch (xlsxError) {
-            console.error('Error generating Excel file:', xlsxError);
-            res.status(500).json({ 
-                success: false, 
-                error: 'Error generating report file',
-                details: xlsxError.message 
-            });
-        }
+        const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+        
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename=quiz-report-${quiz._id}.xlsx`);
+        res.send(buffer);
     } catch (error) {
-        console.error('Error in generateReport:', error);
-        res.status(400).json({ 
-            success: false, 
-            error: 'Failed to generate report',
-            details: error.message 
-        });
+        res.status(400).json({ success: false, error: error.message });
     }
 };

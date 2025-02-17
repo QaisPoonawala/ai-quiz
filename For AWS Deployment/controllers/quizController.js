@@ -406,22 +406,29 @@ exports.exportQuizResults = async (req, res) => {
             throw new Error(`Error processing quiz data: ${processError.message}`);
         }
 
-        // Generate Excel buffer
-        const filename = `quiz-results-${quiz.id}-${Date.now()}.xlsx`;
-        console.log('Generating Excel buffer');
+        // Generate Excel file
+        const filename = `quiz-results-${quiz.id}.xlsx`;
+        const filePath = path.join(__dirname, '..', 'public', 'exports', filename);
+        console.log('Writing file to:', filePath);
         
         try {
-            // Write to buffer instead of file
-            const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+            xlsx.writeFile(wb, filePath);
+            console.log('File written successfully');
             
-            // Set headers for file download
-            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-            res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-            res.setHeader('Content-Length', buffer.length);
+            // Verify file exists
+            const fs = require('fs');
+            if (fs.existsSync(filePath)) {
+                console.log('File exists after writing');
+            } else {
+                console.error('File does not exist after writing');
+            }
             
-            // Send buffer directly to client
-            res.send(buffer);
-            console.log('Excel file sent successfully');
+            res.json({
+                success: true,
+                data: {
+                    downloadUrl: `/exports/${filename}`
+                }
+            });
         } catch (writeError) {
             console.error('Error writing file:', writeError);
             throw writeError;

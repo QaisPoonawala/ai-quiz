@@ -1,28 +1,29 @@
 const { DynamoDB } = require('@aws-sdk/client-dynamodb');
 
+require('dotenv').config();
+
+const isLocal = process.env.USE_LOCAL_DB === 'true' || process.argv.includes('--local');
 const dynamodb = new DynamoDB({
-    endpoint: 'http://localhost:8000',
-    region: 'local',
-    credentials: {
-        accessKeyId: 'dummy',
-        secretAccessKey: 'dummy'
-    }
+    region: process.env.AWS_REGION,
+    endpoint: isLocal ? 'http://localhost:8000' : undefined,
+    ...(isLocal && {
+        credentials: {
+            accessKeyId: 'local',
+            secretAccessKey: 'local'
+        }
+    })
 });
 
 async function createTables() {
     try {
-        // Delete existing tables if they exist
+        // Check if tables exist and create if they don't
         try {
-            await dynamodb.deleteTable({ TableName: 'Quizzes' });
-            await dynamodb.deleteTable({ TableName: 'Participants' });
-            console.log('Existing tables deleted');
+            await dynamodb.describeTable({ TableName: process.env.DYNAMODB_QUIZZES_TABLE });
+            console.log('Quizzes table exists');
         } catch (error) {
-            // Ignore if tables don't exist
-        }
-
-        // Create Quizzes table
-        await dynamodb.createTable({
-            TableName: 'Quizzes',
+            if (error.name === 'ResourceNotFoundException') {
+                await dynamodb.createTable({
+            TableName: process.env.DYNAMODB_QUIZZES_TABLE,
             AttributeDefinitions: [
                 { AttributeName: 'id', AttributeType: 'S' }
             ],
@@ -35,11 +36,19 @@ async function createTables() {
             }
         });
 
-        console.log('Quizzes table created');
+                console.log('Quizzes table created');
+            } else {
+                throw error;
+            }
+        }
 
-        // Create Participants table
-        await dynamodb.createTable({
-            TableName: 'Participants',
+        try {
+            await dynamodb.describeTable({ TableName: process.env.DYNAMODB_PARTICIPANTS_TABLE });
+            console.log('Participants table exists');
+        } catch (error) {
+            if (error.name === 'ResourceNotFoundException') {
+                await dynamodb.createTable({
+            TableName: process.env.DYNAMODB_PARTICIPANTS_TABLE,
             AttributeDefinitions: [
                 { AttributeName: 'id', AttributeType: 'S' },
                 { AttributeName: 'quizId', AttributeType: 'S' },
@@ -90,8 +99,13 @@ async function createTables() {
             }
         });
 
-        console.log('Participants table created');
-        console.log('All tables created successfully');
+                console.log('Participants table created');
+            } else {
+                throw error;
+            }
+        }
+
+        console.log('Tables verification completed');
     } catch (error) {
         console.error('Error creating tables:', error);
         process.exit(1);

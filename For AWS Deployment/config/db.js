@@ -3,8 +3,16 @@ const { DynamoDBDocumentClient } = require('@aws-sdk/lib-dynamodb');
 require('dotenv').config();
 
 // Configure AWS credentials and region
+const isLocal = process.env.USE_LOCAL_DB === 'true' || process.argv.includes('--local');
 const config = {
-    region: process.env.AWS_REGION
+    region: process.env.AWS_REGION,
+    endpoint: isLocal ? 'http://localhost:8000' : undefined,
+    ...(isLocal && {
+        credentials: {
+            accessKeyId: 'local',
+            secretAccessKey: 'local'
+        }
+    })
 };
 
 // Create DynamoDB client with enhanced logging

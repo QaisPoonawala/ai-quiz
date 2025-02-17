@@ -6,14 +6,18 @@ const {
     nextQuestion,
     submitAnswer,
     getLeaderboard,
-    generateReport
+    generateReport,
+    handleDisconnect,
+    handleReconnect
 } = require('../controllers/liveQuizController');
 
 router.post('/start/:id', startLiveQuiz);
 router.post('/join', joinQuiz);
 router.post('/next/:id', nextQuestion);
-router.post('/submit', submitAnswer);
+router.post('/answer', submitAnswer);
 router.get('/leaderboard/:id', getLeaderboard);
 router.get('/report/:id', generateReport);
+router.post('/disconnect', handleDisconnect);
+router.post('/reconnect', handleReconnect);
 
 module.exports = router;

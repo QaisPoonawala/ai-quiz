@@ -114,68 +114,175 @@ function showQuizForm() {
     document.getElementById('liveQuizControl').style.display = 'none';
 }
 
-// Socket connection
-const socket = io(window.location.origin, {
-    path: '/socket.io',
+// Socket connection and state
+let socket = io({
     transports: ['websocket', 'polling'],
-    reconnectionAttempts: 5,
+    reconnection: true,
+    reconnectionAttempts: 10,
     reconnectionDelay: 1000,
+    reconnectionDelayMax: 5000,
     timeout: 20000
 });
+let sessionId = null;
+let isConnected = false;
+let reconnectAttempts = 0;
+const maxReconnectAttempts = 10;
 
-// Connection error handling
+// Add connection status indicator
+const statusDiv = document.createElement('div');
+statusDiv.id = 'connectionStatus';
+statusDiv.style.position = 'fixed';
+statusDiv.style.top = '10px';
+statusDiv.style.right = '10px';
+statusDiv.style.padding = '5px 10px';
+statusDiv.style.borderRadius = '5px';
+statusDiv.style.zIndex = '1000';
+document.body.appendChild(statusDiv);
+
+const updateConnectionStatus = (status, message = '') => {
+    const statusDiv = document.getElementById('connectionStatus');
+    if (statusDiv) {
+        statusDiv.textContent = status;
+        statusDiv.style.backgroundColor = status === 'Connected' ? '#4CAF50' : '#f44336';
+        statusDiv.style.color = 'white';
+        if (message) {
+            console.log(`Connection status: ${status} - ${message}`);
+        }
+    }
+};
+
+// Enhanced socket connection events
+socket.on('connect', () => {
+    console.log('Socket connected');
+    isConnected = true;
+    reconnectAttempts = 0;
+    updateConnectionStatus('Connected');
+
+    // If we have a sessionId, attempt to reconnect to the quiz
+    if (sessionId) {
+        fetch('/api/live/reconnect', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ sessionId })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                console.log('Successfully reconnected to quiz');
+                // Re-join the quiz room
+                socket.emit('join-quiz', { sessionId });
+            }
+        })
+        .catch(error => {
+            console.error('Error reconnecting to quiz:', error);
+            updateConnectionStatus('Error', 'Failed to reconnect to quiz');
+        });
+    }
+});
+
 socket.on('connect_error', (error) => {
-    console.error('Socket connection error:', error);
-    alert('Connection error. Please refresh the page.');
+    console.error('Connection error:', error);
+    updateConnectionStatus('Disconnected', 'Connection error');
 });
 
-socket.on('reconnect', (attemptNumber) => {
-    console.log('Reconnected after', attemptNumber, 'attempts');
+socket.on('connect_timeout', () => {
+    console.error('Connection timeout');
+    updateConnectionStatus('Disconnected', 'Connection timeout');
 });
 
-socket.on('reconnect_failed', () => {
-    console.error('Failed to reconnect');
-    alert('Connection lost. Please refresh the page.');
+socket.on('disconnect', () => {
+    console.log('Socket disconnected');
+    isConnected = false;
+
+    // Notify server about disconnection if we have a sessionId
+    if (sessionId) {
+        fetch('/api/live/disconnect', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ sessionId })
+        })
+        .catch(error => {
+            console.error('Error notifying server about disconnection:', error);
+        });
+    }
+
+    // Attempt to reconnect
+    if (reconnectAttempts < maxReconnectAttempts) {
+        reconnectAttempts++;
+        setTimeout(() => {
+            console.log(`Attempting to reconnect (attempt ${reconnectAttempts})`);
+            socket.connect();
+        }, 1000 * reconnectAttempts); // Exponential backoff
+    }
 });
 
 socket.on('participant-count', (data) => {
+    console.log('Received participant count:', data);
     const participantCount = document.getElementById('participantNumber');
     const participantNames = document.getElementById('participantNames');
-    if (participantCount) {
-        participantCount.textContent = data.count;
-    }
-    if (participantNames && data.participants) {
-        participantNames.textContent = data.participants.map(p => p.name).join('\t');
+    const currentQuestion = document.getElementById('currentQuestionNumber');
+    
+    try {
+        if (participantCount) {
+            participantCount.textContent = data.count || '0';
+        }
+        if (participantNames && data.participants) {
+            participantNames.innerHTML = data.participants
+                .map(p => `<span class="participant-name">${p.name}</span>`)
+                .join(' ');
+        }
+        if (currentQuestion && data.currentQuestion !== undefined) {
+            currentQuestion.textContent = (data.currentQuestion + 1).toString();
+        }
+    } catch (error) {
+        console.error('Error updating participant information:', error);
     }
 });
 
-// Timer variables
-let timerInterval;
+socket.on('quiz-joined', (data) => {
+    // Store sessionId when joining a quiz
+    if (data.sessionId) {
+        sessionId = data.sessionId;
+    }
+    console.log('Quiz joined event:', data);
+    if (data.currentQuestion >= 0) {
+        document.getElementById('currentQuestionNumber').textContent = data.currentQuestion + 1;
+    }
+});
 
 socket.on('new-question', (data) => {
-    const currentQuestionDetails = document.getElementById('currentQuestionDetails');
-    const currentQuestionText = document.getElementById('currentQuestionText');
-    const timeRemaining = document.getElementById('timeRemaining');
+    console.log('New question event:', data);
+    const currentQuestionNumber = document.getElementById('currentQuestionNumber');
+    const questionDisplay = document.getElementById('questionDisplay');
     
-    if (currentQuestionDetails && currentQuestionText && timeRemaining) {
-        currentQuestionDetails.style.display = 'block';
-        currentQuestionText.textContent = data.question.questionText;
-        
-        // Clear existing timer
-        if (timerInterval) clearInterval(timerInterval);
-        
-        // Set up new timer
-        let remainingTime = data.timeLimit;
-        timeRemaining.textContent = remainingTime;
-        
-        timerInterval = setInterval(() => {
-            remainingTime--;
-            timeRemaining.textContent = remainingTime;
-            
-            if (remainingTime <= 0) {
-                clearInterval(timerInterval);
-            }
-        }, 1000);
+    if (currentQuestionNumber) {
+        const questionNum = parseInt(currentQuestionNumber.textContent);
+        if (!isNaN(questionNum)) {
+            currentQuestionNumber.textContent = questionNum;
+        }
+    }
+
+    // Display current question details
+    if (questionDisplay && data.question) {
+        questionDisplay.innerHTML = `
+            <div class="current-question">
+                <h3>Current Question</h3>
+                <p class="question-text">${data.question.questionText}</p>
+                <div class="time-limit">Time Limit: ${data.timeLimit} seconds</div>
+                <div class="options-list">
+                    ${data.question.options.map((option, index) => `
+                        <div class="option">
+                            <span class="option-letter">${String.fromCharCode(65 + index)}.</span>
+                            <span class="option-text">${option.text}</span>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        `;
     }
 });
 
@@ -217,7 +324,6 @@ function filterAndDisplayQuizzes() {
     container.innerHTML = '';
     
     filteredQuizzes.forEach(quiz => {
-        const hasResults = quiz.archivedResults && quiz.archivedResults.length > 0;
         const quizCard = `
             <div class="quiz-card">
                 <div class="quiz-header">
@@ -228,13 +334,11 @@ function filterAndDisplayQuizzes() {
                         <button onclick="editQuiz('${quiz.id}')">Edit</button>
                         <button onclick="copyQuiz('${quiz.id}')">Copy</button>
                         <button onclick="deleteQuiz('${quiz.id}')">Delete</button>
-                        ${hasResults ? `<button onclick="downloadReport('${quiz.id}')" class="download-report-btn">Download Results</button>` : ''}
                     </div>
                 </div>
                 <p>${quiz.description}</p>
                 <div class="quiz-meta">
                     <span>${quiz.questions.length} Questions</span>
-                    ${hasResults ? `<span>${quiz.archivedResults.length} Participants</span>` : ''}
                 </div>
             </div>
         `;
@@ -374,18 +478,24 @@ async function startLiveQuiz(id) {
             document.getElementById('liveQuizControl').style.display = 'block';
             
             // Apply theme if available
-            const quiz = allQuizzes.find(q => q._id === id);
+            const quiz = allQuizzes.find(q => q.id === id);
             if (quiz && quiz.theme) {
                 applyTheme(quiz.theme);
             }
             
+            // Reset UI elements
             document.getElementById('sessionCode').textContent = data.data.sessionCode;
             document.getElementById('currentQuestionNumber').textContent = '0';
             document.getElementById('nextQuestionBtn').textContent = 'Start Quiz';
+            document.getElementById('participantNumber').textContent = '0';
+            document.getElementById('participantNames').innerHTML = '';
+            document.getElementById('liveLeaderboardList').innerHTML = '';
+            
             // Show control buttons
             document.getElementById('downloadReportBtn').style.display = 'block';
             document.getElementById('endQuizBtn').style.display = 'block';
             
+            console.log('Emitting host-quiz event for quiz:', id);
             socket.emit('host-quiz', { quizId: id });
             
             // Generate QR code
@@ -486,41 +596,16 @@ async function downloadReport() {
 
         console.log('Downloading report for quiz:', quizId);
         const response = await fetch(`/api/quiz/${quizId}/export`);
-        
-        // Check if the response is ok
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.message || 'Failed to download report');
+        const data = await response.json();
+        if (data.success) {
+            window.open(data.data.downloadUrl, '_blank');
+        } else {
+            console.error('Download report failed:', data);
+            alert(`Error downloading report: ${data.error || 'Unknown error'}`);
         }
-
-        // Get the filename from the Content-Disposition header
-        const contentDisposition = response.headers.get('Content-Disposition');
-        const filename = contentDisposition
-            ? contentDisposition.split('filename=')[1].replace(/"/g, '')
-            : `quiz-results-${quizId}.xlsx`;
-
-        // Create a blob from the response
-        const blob = await response.blob();
-        
-        // Create a temporary link to trigger the download
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.style.display = 'none';
-        a.href = url;
-        a.download = filename;
-        
-        // Trigger the download
-        document.body.appendChild(a);
-        a.click();
-        
-        // Cleanup
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
-        
-        console.log('Report downloaded successfully');
     } catch (error) {
         console.error('Error downloading report:', error);
-        alert(`Error downloading report: ${error.message}`);
+        alert('Error downloading report. Please check the console for details.');
     }
 }
 
@@ -532,112 +617,6 @@ function applyTheme(theme) {
     root.style.setProperty('--accent-color', theme.accentColor || '#007bff');
 }
 
-// Function to view quiz details
-async function viewQuiz(id) {
-    try {
-        const quiz = allQuizzes.find(q => q.id === id);
-        if (!quiz) {
-            alert('Quiz not found');
-            return;
-        }
-
-        // Show quiz form in view mode
-        document.getElementById('quizList').style.display = 'none';
-        document.getElementById('quizForm').style.display = 'block';
-        document.getElementById('liveQuizControl').style.display = 'none';
-
-        // Add cancel button if it doesn't exist
-        let cancelButton = document.getElementById('cancelButton');
-        if (!cancelButton) {
-            const submitButton = document.querySelector('#createQuizForm button[type="submit"]');
-            cancelButton = document.createElement('button');
-            cancelButton.id = 'cancelButton';
-            cancelButton.type = 'button';
-            cancelButton.className = 'cancel-button';
-            cancelButton.textContent = 'Cancel';
-            cancelButton.onclick = () => {
-                document.getElementById('createQuizForm').reset();
-                document.getElementById('questionsContainer').innerHTML = '';
-                showQuizzes();
-            };
-            submitButton.parentNode.insertBefore(cancelButton, submitButton);
-        }
-
-        // Fill form with quiz data
-        document.getElementById('quizTitle').value = quiz.title;
-        document.getElementById('quizDescription').value = quiz.description;
-        document.getElementById('backgroundColor').value = quiz.theme?.backgroundColor || '#ffffff';
-        document.getElementById('textColor').value = quiz.theme?.textColor || '#333333';
-        document.getElementById('accentColor').value = quiz.theme?.accentColor || '#007bff';
-
-        // Make all form fields readonly
-        document.querySelectorAll('#createQuizForm input, #createQuizForm textarea').forEach(input => {
-            input.readOnly = true;
-        });
-
-        // Hide submit button
-        document.querySelector('#createQuizForm button[type="submit"]').style.display = 'none';
-
-        // Add questions in readonly mode
-        quiz.questions.forEach(question => {
-            const questionsContainer = document.getElementById('questionsContainer');
-            const questionNumber = questionsContainer.children.length + 1;
-
-            const questionHTML = `
-                <div class="question-container">
-                    <h3>Question ${questionNumber}</h3>
-                    <div class="form-group">
-                        <label>Question Text:</label>
-                        <input type="text" class="question-text" value="${question.questionText}" readonly>
-                    </div>
-                    <div class="form-group">
-                        <label>Time Limit (seconds):</label>
-                        <input type="number" class="time-limit" value="${question.timeLimit}" readonly>
-                    </div>
-                    <div class="form-group">
-                        <label>Image:</label>
-                        <div class="image-preview">
-                            ${question.imageUrl ? `<img src="${question.imageUrl}" alt="Question image">` : 'No image'}
-                        </div>
-                    </div>
-                    <div class="options-container">
-                        <h4>Options</h4>
-                        ${question.options.map((option, index) => `
-                            <div class="option">
-                                <input type="text" value="${option.text}" readonly>
-                                <label>
-                                    <input type="checkbox" class="correct-option" ${option.isCorrect ? 'checked' : ''} disabled>
-                                    Correct
-                                </label>
-                            </div>
-                        `).join('')}
-                    </div>
-                </div>
-            `;
-            questionsContainer.insertAdjacentHTML('beforeend', questionHTML);
-        });
-
-        // Hide add/remove buttons in view mode
-        document.querySelectorAll('.remove-question, button[onclick^="addOption"], button[onclick^="removeOption"]').forEach(button => {
-            button.style.display = 'none';
-        });
-
-        // Add download report button if quiz has archived results
-        if (quiz.archivedResults && quiz.archivedResults.length > 0) {
-            const actionButtons = document.createElement('div');
-            actionButtons.className = 'quiz-view-actions';
-            actionButtons.innerHTML = `
-                <button onclick="downloadReport('${quiz.id}')" class="download-report-btn">Download Results</button>
-            `;
-            document.getElementById('quizForm').insertBefore(actionButtons, document.getElementById('questionsContainer'));
-        }
-
-    } catch (error) {
-        console.error('Error viewing quiz:', error);
-        alert('Error viewing quiz. Please check the console for details.');
-    }
-}
-
 async function editQuiz(id) {
     try {
         const quiz = allQuizzes.find(q => q.id === id);
@@ -646,26 +625,14 @@ async function editQuiz(id) {
             return;
         }
 
+        // Clear existing form data
+        document.getElementById('createQuizForm').reset();
+        document.getElementById('questionsContainer').innerHTML = '';
+
         // Show quiz form
         document.getElementById('quizList').style.display = 'none';
         document.getElementById('quizForm').style.display = 'block';
         document.getElementById('liveQuizControl').style.display = 'none';
-
-        // Add save and cancel buttons if they don't exist
-        let actionButtons = document.querySelector('.form-action-buttons');
-        if (!actionButtons) {
-            actionButtons = document.createElement('div');
-            actionButtons.className = 'form-action-buttons';
-            const submitButton = document.querySelector('#createQuizForm button[type="submit"]');
-            submitButton.parentNode.insertBefore(actionButtons, submitButton);
-        }
-        actionButtons.innerHTML = `
-            <button type="button" class="save-button" onclick="updateQuiz('${id}')">Save Changes</button>
-            <button type="button" class="cancel-button" onclick="cancelEdit()">Cancel</button>
-        `;
-
-        // Hide the default submit button
-        document.querySelector('#createQuizForm button[type="submit"]').style.display = 'none';
 
         // Fill form with quiz data
         document.getElementById('quizTitle').value = quiz.title;
@@ -716,6 +683,20 @@ async function editQuiz(id) {
             questionsContainer.insertAdjacentHTML('beforeend', questionHTML);
         });
 
+        // Store the quiz ID being edited
+        document.getElementById('createQuizForm').dataset.editQuizId = id;
+
+        // Update form submission to handle edit
+        const form = document.getElementById('createQuizForm');
+        form.onsubmit = async (e) => {
+            e.preventDefault();
+            const editQuizId = form.dataset.editQuizId;
+            if (editQuizId) {
+                await updateQuiz(editQuizId);
+            } else {
+                await createQuiz(e);
+            }
+        };
     } catch (error) {
         console.error('Error editing quiz:', error);
         alert('Error editing quiz. Please check the console for details.');
@@ -828,9 +809,7 @@ async function copyQuiz(id) {
         
         if (data.success) {
             alert('Quiz copied successfully!');
-            // Instead of just refreshing the list, edit the copied quiz
-            const copiedQuiz = data.data;
-            editQuiz(copiedQuiz.id);
+            loadQuizzes(); // Refresh quiz list
         } else {
             console.error('Copy quiz failed:', data);
             alert(`Error copying quiz: ${data.error || 'Unknown error'}`);
@@ -838,22 +817,6 @@ async function copyQuiz(id) {
     } catch (error) {
         console.error('Error copying quiz:', error);
         alert('Error copying quiz. Please check the console for details.');
-    }
-}
-
-// Function to cancel editing
-function cancelEdit() {
-    if (confirm('Are you sure you want to cancel? Any unsaved changes will be lost.')) {
-        document.getElementById('createQuizForm').reset();
-        document.getElementById('questionsContainer').innerHTML = '';
-        // Remove action buttons
-        const actionButtons = document.querySelector('.form-action-buttons');
-        if (actionButtons) {
-            actionButtons.remove();
-        }
-        // Show the default submit button
-        document.querySelector('#createQuizForm button[type="submit"]').style.display = 'block';
-        showQuizzes();
     }
 }
 
