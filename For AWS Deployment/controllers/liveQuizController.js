@@ -172,7 +172,12 @@ exports.nextQuestion = async (req, res) => {
                 answeredQuestions: (p.answers || []).length,
                 correctAnswers: (p.answers || []).filter(a => a.isCorrect === 1).length
             }))
-            .sort((a, b) => b.score - a.score);
+            .sort((a, b) => b.score - a.score)
+            .map((p, index) => ({
+                ...p,
+                rank: index + 1,
+                totalParticipants: participants.length
+            }));
 
         const nextQuestion = updatedQuiz.questions[currentQuestion];
         if (!nextQuestion) {
@@ -221,10 +226,13 @@ exports.nextQuestion = async (req, res) => {
                 options: nextQuestion.options.map(opt => ({
                     text: opt.text,
                     isCorrect: opt.isCorrect
-                }))
+                })),
+                totalQuestions: quiz.questions.length
             },
             timeLimit: nextQuestion.timeLimit,
-            questionStartTime: questionStartTime
+            questionStartTime: questionStartTime,
+            currentQuestion: currentQuestion,
+            totalQuestions: quiz.questions.length
         });
         io.in(roomId).emit('leaderboard-update', leaderboardData);
         res.status(200).json({
@@ -288,12 +296,12 @@ exports.submitAnswer = async (req, res) => {
         let points = 0;
         if (isCorrect) {
             // For correct answers:
-            // - If answered immediately (timeTaken = 0), get 100 points
-            // - If answered at timeLimit, get 10 points
+            // - If answered immediately (timeTaken = 0), get 1000 points
+            // - If answered at timeLimit, get 100 points
             // - Linear scale between these points
             const timeRatio = Math.min(timeTaken / timeLimit, 1); // Cap at 1 to prevent negative points
-            points = Math.round(100 - (timeRatio * 90)); // Scales from 100 down to 10
-            points = Math.max(10, points); // Ensure minimum 10 points for correct answers
+            points = Math.round(1000 - (timeRatio * 900)); // Scales from 1000 down to 100
+            points = Math.max(100, points); // Ensure minimum 100 points for correct answers
         }
 
         console.log('Points calculation:', {
@@ -356,13 +364,17 @@ exports.submitAnswer = async (req, res) => {
         // Get updated participant data
         const updatedParticipant = await Participant.findById(participant.id);
 
+        // Find the correct answer index
+        const correctAnswerIndex = currentQuestion.options.findIndex(opt => opt.isCorrect === 1 || opt.isCorrect === true);
+
         res.status(200).json({ 
             success: true, 
             data: { 
                 isCorrect: isCorrect ? 1 : 0, 
                 points,
                 score: updatedParticipant.score || 0,
-                leaderboard: leaderboardData
+                leaderboard: leaderboardData,
+                correctAnswer: correctAnswerIndex
             } 
         });
 
@@ -395,7 +407,12 @@ exports.getLeaderboard = async (req, res) => {
                 answeredQuestions: (p.answers || []).length,
                 correctAnswers: (p.answers || []).filter(a => a.isCorrect === 1).length
             }))
-            .sort((a, b) => b.score - a.score);
+            .sort((a, b) => b.score - a.score)
+            .map((p, index) => ({
+                ...p,
+                rank: index + 1,
+                totalParticipants: participants.length
+            }));
 
         res.status(200).json({ success: true, data: leaderboard });
     } catch (error) {

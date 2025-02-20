@@ -917,6 +917,41 @@ input[type="file"] + label:hover {
     background-color: #c82333;
 }
 
+/* Answer feedback animations */
+@keyframes correctAnswer {
+    0% { background-color: #ffffff; }
+    50% { background-color: #4CAF50; }
+    100% { background-color: #e8f5e9; }
+}
+
+@keyframes wrongAnswer {
+    0% { background-color: #ffffff; }
+    50% { background-color: #ff4444; }
+    100% { background-color: #ffebee; }
+}
+
+.correct-answer {
+    animation: correctAnswer 1s ease forwards;
+    border: 2px solid #4CAF50 !important;
+}
+
+.wrong-answer {
+    animation: wrongAnswer 1s ease forwards;
+    border: 2px solid #ff4444 !important;
+}
+
+/* Timer expired animation */
+@keyframes highlightCorrect {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.05); background-color: #4CAF50; }
+    100% { transform: scale(1); background-color: #e8f5e9; }
+}
+
+.highlight-correct {
+    animation: highlightCorrect 1s ease forwards;
+    border: 2px solid #4CAF50 !important;
+}
+
 /* Responsive Design */
 @media (max-width: 768px) {
     .container {
@@ -938,6 +973,39 @@ input[type="file"] + label:hover {
 
     .leaderboard-entry {
         font-size: 14px;
+    }
+
+    /* Mobile-specific leaderboard */
+    #liveLeaderboard {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: rgba(255, 255, 255, 0.95);
+        padding: 10px;
+        box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.1);
+        max-height: 80px;
+        overflow: hidden;
+    }
+
+    #liveLeaderboard .leaderboard-entry {
+        padding: 5px;
+        border: none;
+    }
+
+    #liveLeaderboard .stats {
+        display: none;
+    }
+
+    #liveLeaderboard h3 {
+        display: none;
+    }
+
+    #liveLeaderboard .name {
+        max-width: 100px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 }
 

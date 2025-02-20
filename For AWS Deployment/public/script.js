@@ -254,6 +254,10 @@ socket.on('quiz-joined', (data) => {
     }
 });
 
+// Timer variables
+let timerInterval;
+let remainingTime;
+
 socket.on('new-question', (data) => {
     console.log('New question event:', data);
     const currentQuestionNumber = document.getElementById('currentQuestionNumber');
@@ -262,20 +266,30 @@ socket.on('new-question', (data) => {
     if (currentQuestionNumber) {
         const questionNum = parseInt(currentQuestionNumber.textContent);
         if (!isNaN(questionNum)) {
-            currentQuestionNumber.textContent = questionNum;
+            // Show current question number and total questions
+            const totalQuestions = data.totalQuestions || data.question.totalQuestions;
+            currentQuestionNumber.textContent = `${questionNum}/${totalQuestions}`;
         }
+    }
+
+    // Clear any existing timer
+    if (timerInterval) {
+        clearInterval(timerInterval);
     }
 
     // Display current question details
     if (questionDisplay && data.question) {
+        // Set initial timer value
+        remainingTime = data.timeLimit;
+        
         questionDisplay.innerHTML = `
             <div class="current-question">
                 <h3>Current Question</h3>
                 <p class="question-text">${data.question.questionText}</p>
-                <div class="time-limit">Time Limit: ${data.timeLimit} seconds</div>
+                <div class="time-limit">Time Remaining: <span id="countdown">${remainingTime}</span> seconds</div>
                 <div class="options-list">
                     ${data.question.options.map((option, index) => `
-                        <div class="option">
+                        <div class="option" data-correct="${option.isCorrect}">
                             <span class="option-letter">${String.fromCharCode(65 + index)}.</span>
                             <span class="option-text">${option.text}</span>
                         </div>
@@ -283,16 +297,53 @@ socket.on('new-question', (data) => {
                 </div>
             </div>
         `;
+
+        // Start countdown timer
+        const countdownElement = document.getElementById('countdown');
+        timerInterval = setInterval(() => {
+            remainingTime--;
+            if (countdownElement) {
+                countdownElement.textContent = remainingTime;
+            }
+            if (remainingTime <= 0) {
+                clearInterval(timerInterval);
+                // Highlight correct answers when time expires
+                const options = document.querySelectorAll('.option');
+                options.forEach(option => {
+                    if (option.dataset.correct === 'true') {
+                        option.classList.add('highlight-correct');
+                    }
+                });
+            }
+        }, 1000);
     }
+});
+
+// Add visual feedback for answers
+socket.on('answer-result', (data) => {
+    const options = document.querySelectorAll('.option');
+    options.forEach(option => {
+        if (data.correct) {
+            if (option.dataset.correct === 'true') {
+                option.classList.add('correct-answer');
+            }
+        } else {
+            if (option.dataset.correct === 'true') {
+                option.classList.add('correct-answer');
+            }
+            if (option.dataset.correct === 'false') {
+                option.classList.add('wrong-answer');
+            }
+        }
+    });
 });
 
 socket.on('leaderboard-update', (leaderboardData) => {
     const leaderboardList = document.getElementById('liveLeaderboardList');
     if (leaderboardList) {
         leaderboardList.innerHTML = leaderboardData
-            .map((participant, index) => `
-                <div class="leaderboard-entry ${index < 3 ? 'top-three' : ''}">
-                    <span class="rank">${index + 1}</span>
+            .map((participant) => `
+                <div class="leaderboard-entry ${participant.rank <= 3 ? 'top-three' : ''}">
                     <span class="name">${participant.name}</span>
                     <span class="score">${participant.score}</span>
                     <div class="stats">
@@ -486,6 +537,7 @@ async function startLiveQuiz(id) {
             // Reset UI elements
             document.getElementById('sessionCode').textContent = data.data.sessionCode;
             document.getElementById('currentQuestionNumber').textContent = '0';
+            document.getElementById('totalQuestions').textContent = quiz.questions.length.toString();
             document.getElementById('nextQuestionBtn').textContent = 'Start Quiz';
             document.getElementById('participantNumber').textContent = '0';
             document.getElementById('participantNames').innerHTML = '';
@@ -530,8 +582,8 @@ async function nextQuestion() {
                 return;
             }
 
-            document.getElementById('currentQuestionNumber').textContent = 
-                parseInt(document.getElementById('currentQuestionNumber').textContent) + 1;
+            const currentNum = parseInt(document.getElementById('currentQuestionNumber').textContent) + 1;
+            document.getElementById('currentQuestionNumber').textContent = currentNum.toString();
             document.getElementById('nextQuestionBtn').textContent = 'Next Question';
         } else {
             console.error('Next question failed:', data);
@@ -905,7 +957,7 @@ function showWinners(leaderboard) {
             leaderboardList.innerHTML = sortedLeaderboard
                 .map((participant, index) => `
                     <div class="leaderboard-entry ${index < 3 ? 'top-three' : ''}">
-                        <span class="rank">${index + 1}</span>
+                        <span class="rank">${index + 1}/${sortedLeaderboard.length}</span>
                         <span class="name">${participant.name}</span>
                         <span class="score">${participant.score}</span>
                         <div class="stats">

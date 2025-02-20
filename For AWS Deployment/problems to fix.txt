@@ -1,6 +1,0 @@
-To summarize our AWS Quiz environment is running on ECS, Dynamodb and Redis as core component.
-We need your help to fix following issues
-
-1. when I click on Copy, then I click edit the quiz and click on create Quiz, this creates duplicate quiz
-2. while creating a Quiz, it straitaway exits quiz form if we do not pick correct answer
-3. when I do Start Live for a quiz, no questions are displayed after I click Start Quiz. Hence as admin I do not have a view on the question on the screen and time left to answer it.
